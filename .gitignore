@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Backend runtime data (local-only per PRD, never committed)
+backend/storage/uploads/*
+backend/storage/images/*
+backend/storage/generated/*
+backend/storage/temp/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/images/.gitkeep
+!backend/storage/generated/.gitkeep
+!backend/storage/temp/.gitkeep
+backend/data/*.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editor/OS
+.vscode/
+.DS_Store
+Thumbs.db
