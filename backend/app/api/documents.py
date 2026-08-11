@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.repositories import bill_repository, document_repository, generated_file_repository, scenario_repository
 from app.schemas.document import (
+    DocumentDetail,
     DocumentExtractResponse,
     DocumentFilesResponse,
     DocumentListResponse,
@@ -75,6 +76,24 @@ def list_documents(limit: int = 50, offset: int = 0, db: Session = Depends(get_d
             )
         )
     return DocumentListResponse(documents=summaries)
+
+
+@router.get("/{document_id}", response_model=DocumentDetail)
+def get_document(document_id: str, db: Session = Depends(get_db)) -> DocumentDetail:
+    document = document_repository.get(db, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    bill = bill_repository.get_by_document(db, document_id)
+    return DocumentDetail(
+        id=document.id,
+        original_filename=document.original_filename,
+        mime_type=document.mime_type,
+        file_size=document.file_size,
+        uploaded_at=document.uploaded_at,
+        status=document.status,
+        bill_id=bill.id if bill else None,
+        preview_url=f"/files/uploads/{document.stored_filename}",
+    )
 
 
 @router.get("/{document_id}/files", response_model=DocumentFilesResponse)

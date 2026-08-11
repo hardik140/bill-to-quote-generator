@@ -34,6 +34,11 @@ app.mount(
     StaticFiles(directory=str(settings.generated_dir)),
     name="generated-files",
 )
+app.mount(
+    "/files/uploads",
+    StaticFiles(directory=str(settings.uploads_dir)),
+    name="uploaded-files",
+)
 
 
 @app.get("/api/health")

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.bill import EXTRACTION_COMPLETED
-from app.repositories import bill_repository
+from app.repositories import bill_repository, scenario_repository
 from app.schemas.bill import (
     BillItemCreate,
     BillItemOut,
@@ -15,6 +15,7 @@ from app.schemas.bill import (
     ConfirmResponse,
     ItemReorderRequest,
 )
+from app.schemas.scenario import ScenarioOut
 from app.services.calculation_service import compute_bill_totals, compute_line
 from app.services.validation_service import ValidationError, validate_gst_rate, validate_quantity, validate_rate
 
@@ -197,3 +198,10 @@ def confirm_bill(bill_id: str, db: Session = Depends(get_db)) -> ConfirmResponse
     bill.extraction_status = EXTRACTION_COMPLETED
     db.commit()
     return ConfirmResponse(bill_id=bill.id, confirmed=True)
+
+
+@router.get("/{bill_id}/scenarios", response_model=list[ScenarioOut])
+def list_bill_scenarios(bill_id: str, db: Session = Depends(get_db)) -> list[ScenarioOut]:
+    _get_bill_or_404(db, bill_id)
+    scenarios = scenario_repository.list_for_bill(db, bill_id)
+    return [ScenarioOut.model_validate(s) for s in scenarios]

@@ -32,6 +32,19 @@ class DocumentListResponse(BaseModel):
     documents: list[DocumentSummary]
 
 
+class DocumentDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    original_filename: str
+    mime_type: str
+    file_size: int
+    uploaded_at: datetime
+    status: str
+    bill_id: str | None = None
+    preview_url: str
+
+
 class GeneratedFileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
