@@ -22,8 +22,6 @@ class DocumentSummary(BaseModel):
     original_filename: str
     uploaded_at: datetime
     status: str
-    vendor_name: str | None = None
-    invoice_number: str | None = None
     grand_total: Decimal | None = None
     scenario_count: int = 0
 

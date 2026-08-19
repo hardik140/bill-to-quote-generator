@@ -76,3 +76,20 @@ def copy_to_generated(source: Path, bill_id: str, filename: str) -> Path:
     target = target_dir / filename
     shutil.copyfile(source, target)
     return target
+
+
+def delete_document_storage(stored_filename: str, document_id: str, bill_id: str | None = None) -> None:
+    upload_path = settings.uploads_dir / stored_filename
+    try:
+        upload_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    doc_images = settings.images_dir / document_id
+    if doc_images.exists():
+        shutil.rmtree(doc_images, ignore_errors=True)
+
+    if bill_id:
+        gen_dir = settings.generated_dir / bill_id
+        if gen_dir.exists():
+            shutil.rmtree(gen_dir, ignore_errors=True)

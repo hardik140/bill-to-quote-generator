@@ -38,7 +38,7 @@ class Scenario(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     bill_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("bills.id"), nullable=False, index=True
+        String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     scenario_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -51,6 +51,7 @@ class Scenario(Base):
     grand_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
 
     disclaimer: Mapped[str | None] = mapped_column(String(200))
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     bill: Mapped["Bill"] = relationship(back_populates="scenarios")

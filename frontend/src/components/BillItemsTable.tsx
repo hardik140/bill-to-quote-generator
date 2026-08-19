@@ -6,7 +6,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import type { BillItemOut } from '../types'
-import { formatMoney } from '../lib/format'
 import ConfidenceDot from './ConfidenceDot'
 
 interface Props {
@@ -42,7 +41,7 @@ function EditableCell({
         if (draft !== String(value)) onCommit(draft)
       }}
       className={`w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm hover:border-slate-200 focus:border-indigo-400 focus:bg-white focus:outline-none disabled:text-slate-400 ${
-        align === 'right' ? 'text-right' : 'text-left'
+        align === 'right' ? 'text-right font-medium' : 'text-left'
       }`}
     />
   )
@@ -61,7 +60,7 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
         cell: (info) => <span className="text-slate-400">{info.getValue()}</span>,
       }),
       columnHelper.accessor('description', {
-        header: 'Description',
+        header: 'Product Name',
         cell: ({ row }) => (
           <EditableCell
             value={row.original.description}
@@ -70,77 +69,23 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
           />
         ),
       }),
-      columnHelper.accessor('hsn_sac', {
-        header: 'HSN/SAC',
+      columnHelper.accessor('rate', {
+        header: () => <span className="block text-right">Rate</span>,
         cell: ({ row }) => (
           <EditableCell
-            value={row.original.hsn_sac ?? ''}
-            disabled={readOnly}
-            onCommit={(v) => onFieldCommit(row.original.id, 'hsn_sac', v)}
-          />
-        ),
-      }),
-      columnHelper.accessor('quantity', {
-        header: 'Qty',
-        cell: ({ row }) => (
-          <EditableCell
-            value={row.original.quantity}
+            value={row.original.rate}
             disabled={readOnly}
             align="right"
-            onCommit={(v) => onFieldCommit(row.original.id, 'quantity', v)}
+            onCommit={(v) => onFieldCommit(row.original.id, 'rate', v)}
           />
         ),
-      }),
-      columnHelper.accessor('unit', {
-        header: 'Unit',
-        cell: ({ row }) => (
-          <EditableCell
-            value={row.original.unit ?? ''}
-            disabled={readOnly}
-            onCommit={(v) => onFieldCommit(row.original.id, 'unit', v)}
-          />
-        ),
-      }),
-      columnHelper.accessor('taxable_rate', {
-        header: 'Rate',
-        cell: ({ row }) => (
-          <EditableCell
-            value={row.original.taxable_rate}
-            disabled={readOnly}
-            align="right"
-            onCommit={(v) => onFieldCommit(row.original.id, 'taxable_rate', v)}
-          />
-        ),
-      }),
-      columnHelper.accessor('gst_rate', {
-        header: 'GST %',
-        cell: ({ row }) => (
-          <EditableCell
-            value={row.original.gst_rate}
-            disabled={readOnly}
-            align="right"
-            onCommit={(v) => onFieldCommit(row.original.id, 'gst_rate', v)}
-          />
-        ),
-      }),
-      columnHelper.accessor('line_amount', {
-        header: 'Amount',
-        cell: (info) => <span className="block text-right text-slate-600">{formatMoney(info.getValue(), currency)}</span>,
-      }),
-      columnHelper.accessor('tax_amount', {
-        header: 'Tax',
-        cell: (info) => <span className="block text-right text-slate-600">{formatMoney(info.getValue(), currency)}</span>,
-      }),
-      columnHelper.accessor('total_amount', {
-        header: 'Total',
-        cell: (info) => <span className="block text-right font-medium text-slate-800">{formatMoney(info.getValue(), currency)}</span>,
       }),
       columnHelper.display({
         id: 'actions',
         header: '',
         cell: ({ row }) =>
           readOnly ? null : (
-            <div className="flex items-center gap-1 text-slate-400">
+            <div className="flex items-center justify-end gap-1 text-slate-400">
               <button title="Move up" onClick={() => onMove(row.original.id, -1)} className="hover:text-slate-700">
                 ↑
               </button>
@@ -166,7 +111,7 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
               {hg.headers.map((h) => (
-                <th key={h.id} className="px-2 py-2 first:pl-4 last:pr-4">
+                <th key={h.id} className="px-3 py-2 first:pl-4 last:pr-4">
                   {flexRender(h.column.columnDef.header, h.getContext())}
                 </th>
               ))}
@@ -177,7 +122,7 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
           {table.getRowModel().rows.map((row) => (
             <tr key={row.id} className={row.original.low_confidence && !row.original.user_verified ? 'bg-amber-50/60' : undefined}>
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-2 py-1 first:pl-4 last:pr-4">
+                <td key={cell.id} className="px-3 py-1 first:pl-4 last:pr-4">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}
@@ -185,8 +130,8 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
           ))}
           {items.length === 0 && (
             <tr>
-              <td colSpan={11} className="px-4 py-6 text-center text-slate-400">
-                No line items yet. Use "Add item" below to enter one manually.
+              <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                No line items yet. Use "Add item" to enter one manually.
               </td>
             </tr>
           )}

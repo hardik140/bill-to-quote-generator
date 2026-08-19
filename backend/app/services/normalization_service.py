@@ -5,6 +5,8 @@ TRD §6 pipeline stage: OCR output -> candidate fields -> parser -> normalizer.
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.services.ocr_postprocess import fix_numeric_ocr
+
 NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 CURRENCY_STRIP_RE = re.compile(r"(?:rs\.?|inr|₹)", re.IGNORECASE)
 
@@ -33,6 +35,10 @@ def parse_decimal_loose(raw: str | None) -> Decimal | None:
         return None
     cleaned = CURRENCY_STRIP_RE.sub("", raw)
     match = NUMBER_RE.search(cleaned)
+    if not match:
+        # Fall back to OCR confusion fixes (O↔0, I↔1, ...) only when the
+        # token has no digits at all -- clean input is never rewritten.
+        match = NUMBER_RE.search(fix_numeric_ocr(cleaned))
     if not match:
         return None
     token = match.group(0).replace(",", "")

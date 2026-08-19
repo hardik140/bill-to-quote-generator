@@ -23,3 +23,8 @@ def list_recent(db: Session, limit: int = 50, offset: int = 0) -> list[Document]
 def set_status(db: Session, document: Document, status: str) -> None:
     document.status = status
     db.flush()
+
+
+def delete(db: Session, document: Document) -> None:
+    db.delete(document)
+    db.flush()

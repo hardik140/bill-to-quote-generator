@@ -22,7 +22,9 @@ class ProcessingRun(Base):
     __tablename__ = "processing_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id"), nullable=False)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
 
     processor: Mapped[str] = mapped_column(String(50), nullable=False)
     processor_version: Mapped[str] = mapped_column(String(20), nullable=False)

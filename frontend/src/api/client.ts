@@ -5,7 +5,6 @@ import type {
   BillItemOut,
   BillItemUpdate,
   BillOut,
-  BillUpdate,
   DocumentDetail,
   DocumentExtractResponse,
   DocumentSummary,
@@ -49,15 +48,14 @@ export const documentsApi = {
     const { data } = await http.get<{ files: GeneratedFileOut[] }>(`/api/documents/${documentId}/files`)
     return data.files
   },
+  async delete(documentId: string): Promise<void> {
+    await http.delete(`/api/documents/${documentId}`)
+  },
 }
 
 export const billsApi = {
   async get(billId: string): Promise<BillOut> {
     const { data } = await http.get<BillOut>(`/api/bills/${billId}`)
-    return data
-  },
-  async update(billId: string, payload: BillUpdate): Promise<BillOut> {
-    const { data } = await http.put<BillOut>(`/api/bills/${billId}`, payload)
     return data
   },
   async addItem(billId: string, payload: BillItemCreate): Promise<BillItemOut> {

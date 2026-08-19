@@ -1,11 +1,18 @@
 """Extraction orchestration: preprocessing -> OCR -> parsing -> normalize
 -> confidence -> persistence. TRD §5-6.
 
+Scope (user decision, 2026-08-19): extract only each product's NAME and
+RATE from the uploaded bill -- nothing else. Vendor/buyer/invoice header
+metadata is not extracted, and quantities/GST are not parsed; items are
+stored with quantity=1 and gst_rate=0 so a bill's total is simply the sum
+of its product rates.
+
 OCR never writes a "final" value directly -- every persisted BillItem is
 created with user_verified=False so FR-05 human review is mandatory before
 a bill can be confirmed.
 """
 
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,25 +24,44 @@ from app.models.document import STATUS_FAILED, STATUS_PROCESSED, STATUS_PROCESSI
 from app.repositories import bill_repository, document_repository, processing_run_repository
 from app.services import preprocessing_service
 from app.services.calculation_service import compute_bill_totals, compute_line
-from app.services.field_parser import HeaderFields, extract_document_total, parse_header_fields
+from app.services.field_parser import extract_document_total
 from app.services.line_grouping import group_lines
-from app.services.ocr_service import full_text, run_ocr
+from app.services.ocr_postprocess import filter_noise_words
+from app.services.ocr_service import run_ocr
 from app.services.table_parser import CandidateItem, parse_table
 from app.services.validation_service import check_total_reconciliation
 
 LOW_CONFIDENCE_ITEM_THRESHOLD = Decimal(str(settings.low_confidence_threshold))
+
+# Leading serial markers: "1." / "1)" / "1 -" always, and a bare "1 " only
+# when it matches the row's serial number (see _clean_description).
+_SERIAL_PUNCT_RE = re.compile(r"^\s*\d{1,3}\s*[.):\-]\s+")
+_SERIAL_BARE_RE = re.compile(r"^\s*(\d{1,3})\s+")
 
 
 class ExtractionError(Exception):
     pass
 
 
-def _merge_header_fields(primary: HeaderFields, fallback: HeaderFields) -> HeaderFields:
-    merged = HeaderFields(**vars(primary))
-    for field_name, value in vars(fallback).items():
-        if getattr(merged, field_name) is None and value is not None:
-            setattr(merged, field_name, value)
-    return merged
+def _clean_description(description: str, serial_no: int) -> str:
+    """Strip a leading serial number that OCR attached to the product name.
+
+    "1 Camlin Marker" -> "Camlin Marker". A bare leading number is only
+    removed when it equals the row's serial number, so genuine names that
+    start with a digit ("2 Inch Binder") survive; the punctuated forms
+    ("1.", "1)") are unambiguous and always stripped.
+    """
+    text = _SERIAL_PUNCT_RE.sub("", description.strip())
+    m = _SERIAL_BARE_RE.match(text)
+    if m and m.group(1) == str(serial_no):
+        text = _SERIAL_BARE_RE.sub("", text, count=1)
+    return text.strip()
+
+
+def _candidate_rate(candidate: CandidateItem) -> Decimal | None:
+    """The single rate shown to the user: the printed price, preferring the
+    tax-exclusive rate when the bill prints both."""
+    return candidate.taxable_rate if candidate.taxable_rate is not None else candidate.source_rate
 
 
 def extract_document(db: Session, document: Document) -> Bill:
@@ -60,18 +86,14 @@ def extract_document(db: Session, document: Document) -> Bill:
         if not page_paths:
             raise ExtractionError("No pages could be rendered from the document.")
 
-        header_fields = HeaderFields()
         all_candidate_items: list[CandidateItem] = []
         document_total: Decimal | None = None
         serial_offset = 0
 
         for page_path in page_paths:
             words = run_ocr(page_path)
+            words = filter_noise_words(words)  # strip border artefacts before parsing
             lines = group_lines(words)
-            page_text = full_text(words)
-
-            page_header = parse_header_fields(lines, page_text)
-            header_fields = _merge_header_fields(header_fields, page_header)
 
             if document_total is None:
                 document_total = extract_document_total(lines)
@@ -82,44 +104,31 @@ def extract_document(db: Session, document: Document) -> Bill:
             all_candidate_items.extend(page_items)
             serial_offset += len(page_items)
 
-        bill = bill_repository.create(
-            db,
-            document_id=document.id,
-            vendor_name=header_fields.vendor_name,
-            vendor_address=header_fields.vendor_address,
-            vendor_gstin=header_fields.vendor_gstin,
-            invoice_number=header_fields.invoice_number,
-            invoice_date=header_fields.invoice_date,
-            buyer_name=header_fields.buyer_name,
-            buyer_address=header_fields.buyer_address,
-            currency=settings.default_currency,
-        )
+        bill = bill_repository.create(db, document_id=document.id, currency=settings.default_currency)
 
         needs_review = len(all_candidate_items) == 0
         line_results = []
         for candidate in all_candidate_items:
-            quantity = candidate.quantity if candidate.quantity is not None else Decimal("0")
-            taxable_rate = candidate.taxable_rate if candidate.taxable_rate is not None else Decimal("0")
-            gst_rate = candidate.gst_rate if candidate.gst_rate is not None else Decimal("0")
+            rate = _candidate_rate(candidate)
+            quantity = Decimal("1")
+            gst_rate = Decimal("0")
 
-            line_result = compute_line(quantity, taxable_rate, gst_rate)
+            line_result = compute_line(quantity, rate if rate is not None else Decimal("0"), gst_rate)
             line_results.append(line_result)
 
             is_low_confidence = Decimal(str(candidate.confidence)) < LOW_CONFIDENCE_ITEM_THRESHOLD
-            if candidate.ambiguous or is_low_confidence or candidate.quantity is None or candidate.taxable_rate is None:
+            if candidate.ambiguous or is_low_confidence or rate is None:
                 needs_review = True
 
             bill_repository.add_item(
                 db,
                 bill,
                 serial_no=candidate.serial_no,
-                description=candidate.description,
-                hsn_sac=candidate.hsn_sac,
+                description=_clean_description(candidate.description, candidate.serial_no),
                 gst_rate=gst_rate,
                 quantity=quantity,
-                unit=candidate.unit,
-                source_rate=candidate.source_rate if candidate.source_rate is not None else Decimal("0"),
-                taxable_rate=taxable_rate,
+                source_rate=candidate.source_rate if candidate.source_rate is not None else (rate if rate is not None else Decimal("0")),
+                taxable_rate=candidate.taxable_rate if candidate.taxable_rate is not None else (rate if rate is not None else Decimal("0")),
                 line_amount=line_result.line_amount,
                 tax_amount=line_result.tax_amount,
                 total_amount=line_result.total_amount,

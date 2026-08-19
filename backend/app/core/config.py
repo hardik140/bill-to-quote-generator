@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     ocr_language: str = "eng"
     ocr_processor_name: str = "pytesseract"
     ocr_processor_version: str = "5.5.0"
+    # --psm 4 = single column of text blocks: best for bordered invoice forms.
+    # --dpi 300 = tell Tesseract the real resolution so it calibrates character
+    # height correctly (without this it assumes ~70dpi and mis-sizes everything).
+    # preserve_interword_spaces keeps wide column gaps intact for cell grouping.
+    tesseract_config: str = "--psm 4 --dpi 300 -c preserve_interword_spaces=1"
 
     # Server (localhost only, per TRD security architecture)
     host: str = "127.0.0.1"

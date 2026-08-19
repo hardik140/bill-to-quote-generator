@@ -6,16 +6,6 @@ import Layout from '../components/Layout'
 import BillItemsTable from '../components/BillItemsTable'
 import { formatMoney } from '../lib/format'
 
-const HEADER_FIELDS: { key: keyof BillOut; label: string }[] = [
-  { key: 'vendor_name', label: 'Vendor' },
-  { key: 'vendor_address', label: 'Vendor address' },
-  { key: 'vendor_gstin', label: 'Vendor GSTIN' },
-  { key: 'invoice_number', label: 'Invoice No.' },
-  { key: 'invoice_date', label: 'Invoice date' },
-  { key: 'buyer_name', label: 'Buyer' },
-  { key: 'buyer_address', label: 'Buyer address' },
-]
-
 export default function ExtractionReview() {
   const { documentId } = useParams<{ documentId: string }>()
   const navigate = useNavigate()
@@ -46,28 +36,15 @@ export default function ExtractionReview() {
     load()
   }, [load])
 
-  async function handleHeaderCommit(field: keyof BillOut, value: string) {
-    if (!bill) return
-    try {
-      const updated = await billsApi.update(bill.id, { [field]: value === '' ? null : value })
-      setBill(updated)
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Could not save that change.'))
-    }
-  }
-
   async function handleItemFieldCommit(itemId: string, field: keyof BillItemOut, value: string) {
     if (!bill) return
     setError(null)
     try {
-      const payload = ['description', 'hsn_sac', 'unit'].includes(field as string)
-        ? { [field]: value }
-        : { [field]: value }
+      const payload = field === 'rate' ? { rate: Number(value) } : { [field]: value }
       const updated = await billsApi.updateItem(bill.id, itemId, payload)
       setBill((prev) =>
         prev ? { ...prev, items: prev.items.map((i) => (i.id === itemId ? updated : i)) } : prev
       )
-      // Header totals may have changed; reload for authoritative recalculation.
       const fresh = await billsApi.get(bill.id)
       setBill(fresh)
     } catch (err) {
@@ -106,7 +83,7 @@ export default function ExtractionReview() {
   async function handleAddItem() {
     if (!bill) return
     try {
-      await billsApi.addItem(bill.id, { description: 'New item', quantity: 1, source_rate: 0, taxable_rate: 0, gst_rate: 0 })
+      await billsApi.addItem(bill.id, { description: 'New item', rate: 0 })
       const fresh = await billsApi.get(bill.id)
       setBill(fresh)
     } catch (err) {
@@ -171,63 +148,32 @@ export default function ExtractionReview() {
 
       {bill && bill.extraction_status === 'needs_review' && !bill.confirmed && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Some fields need your review — low-confidence values are highlighted below, and the extracted total may
-          differ from the calculated total. Please verify against the source document before confirming.
+          Some items need your review — low-confidence values are highlighted below, and the extracted total may
+          differ from the sum of rates. Please verify against the source document before confirming.
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-2" style={{ minHeight: 520 }}>
+        <div className="rounded-xl border border-slate-200 bg-white p-2" style={{ minHeight: 480 }}>
           {doc.mime_type === 'application/pdf' ? (
-            <iframe title="Original document" src={doc.preview_url} className="h-[520px] w-full rounded-lg" />
+            <iframe title="Original document" src={doc.preview_url} className="h-[480px] w-full rounded-lg" />
           ) : (
-            <img src={doc.preview_url} alt="Original document" className="mx-auto max-h-[520px] rounded-lg object-contain" />
+            <img src={doc.preview_url} alt="Original document" className="mx-auto max-h-[480px] rounded-lg object-contain" />
           )}
         </div>
 
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Bill details</h2>
-            {!bill ? (
-              <p className="text-sm text-slate-400">No structured data yet.</p>
-            ) : (
-              <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {HEADER_FIELDS.map(({ key, label }) => (
-                  <div key={key}>
-                    <dt className="text-xs text-slate-400">{label}</dt>
-                    <input
-                      defaultValue={(bill[key] as string) ?? ''}
-                      disabled={readOnly}
-                      onBlur={(e) => handleHeaderCommit(key, e.target.value)}
-                      className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
-                    />
-                  </div>
-                ))}
-              </dl>
-            )}
-          </div>
-
+        <div>
           {bill && (
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 flex items-center justify-between">
+            <div className="rounded-xl border border-slate-200 bg-white p-6">
+              <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Totals</h2>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                  SOURCE / BASELINE — DERIVED FROM UPLOADED DOCUMENT
+                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-500">
+                  SOURCE / BASELINE
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-3 text-right">
-                <div>
-                  <div className="text-xs text-slate-400">Subtotal</div>
-                  <div className="font-medium">{formatMoney(bill.subtotal, bill.currency)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-400">Tax</div>
-                  <div className="font-medium">{formatMoney(bill.tax_total, bill.currency)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-400">Grand total</div>
-                  <div className="text-base font-semibold">{formatMoney(bill.grand_total, bill.currency)}</div>
-                </div>
+              <div>
+                <div className="text-xs text-slate-400">Total</div>
+                <div className="text-2xl font-bold text-slate-800">{formatMoney(bill.grand_total, bill.currency)}</div>
               </div>
             </div>
           )}
@@ -237,7 +183,7 @@ export default function ExtractionReview() {
       {bill && (
         <div className="mt-6 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Line items</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Product Line Items</h2>
             {!readOnly && (
               <button onClick={handleAddItem} className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
                 + Add item

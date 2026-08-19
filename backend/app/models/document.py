@@ -35,5 +35,9 @@ class Document(Base):
     )
     status: Mapped[str] = mapped_column(String(20), default=STATUS_UPLOADED, nullable=False)
 
-    bill: Mapped["Bill | None"] = relationship(back_populates="document", uselist=False)
-    processing_runs: Mapped[list["ProcessingRun"]] = relationship(back_populates="document")
+    bill: Mapped["Bill | None"] = relationship(
+        back_populates="document", uselist=False, cascade="all, delete-orphan"
+    )
+    processing_runs: Mapped[list["ProcessingRun"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )

@@ -91,7 +91,7 @@ def build_all_scenarios(
     rounding_mode: str,
 ) -> list[Scenario]:
     return [
-        build_scenario(bill, TYPE_BASELINE, "Source / Baseline", ZERO, "none"),
+        build_scenario(bill, TYPE_BASELINE, "Scenario A — Source / Baseline", ZERO, "none"),
         build_scenario(
             bill,
             TYPE_SIMULATED,

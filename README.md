@@ -123,8 +123,16 @@ python -m pytest -q
 `backend/scripts/generate_fixture_invoice.py` regenerates the test fixture
 at `backend/tests/fixtures/printed_invoice_01.pdf`.
 
-## Notable implementation details
-
+- **Simplified Product Name + Rate Extraction Scope.** The extraction pipeline,
+  API, and UI extract only each item's Product Name and printed Rate. All vendor,
+  buyer, and invoice header fields, as well as HSN, Qty, Unit, and GST columns,
+  are bypassed. Items default internally to `quantity=1` and `gst_rate=0.00`,
+  meaning the bill total is the direct sum of item rates while preserving full
+  compatibility with the existing SQLite schema and `Decimal` calculation engine.
+  Leading OCR serial numbers (e.g. "1 Camlin Marker") are automatically stripped.
+- **Simplified PDF Layout.** Generated PDFs render clean `#`, `Product`, `Rate`,
+  and single `Total` summaries with appropriate simulation disclaimers and
+  rounding policies, without fabricated or distracting header blocks.
 - **Grid-line removal before OCR.** Tesseract's layout analysis silently
   drops entire rows of a ruled/bordered table — verified empirically
   against the fixture invoice (2 of 3 item rows vanished with no error).

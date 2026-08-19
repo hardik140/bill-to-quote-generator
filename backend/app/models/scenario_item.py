@@ -10,6 +10,7 @@ from app.core.database import Base
 from app.utils.ids import new_id
 
 if TYPE_CHECKING:
+    from app.models.bill_item import BillItem
     from app.models.scenario import Scenario
 
 
@@ -18,9 +19,11 @@ class ScenarioItem(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     scenario_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("scenarios.id"), nullable=False, index=True
+        String(36), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    source_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("bill_items.id"), nullable=False)
+    source_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("bill_items.id", ondelete="CASCADE"), nullable=False
+    )
 
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("0"))
@@ -35,3 +38,4 @@ class ScenarioItem(Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
 
     scenario: Mapped["Scenario"] = relationship(back_populates="items")
+    source_item: Mapped["BillItem"] = relationship(back_populates="scenario_items")

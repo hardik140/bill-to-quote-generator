@@ -9,7 +9,7 @@ import fitz  # PyMuPDF
 import numpy as np
 from PIL import Image
 
-MIN_WIDTH_PX = 1600  # resolution normalization floor for reliable OCR
+MIN_WIDTH_PX = 2000  # raised from 1600 — extra pixels give Tesseract cleaner glyphs
 
 
 def pdf_to_page_images(pdf_path: Path, dpi: int = 300) -> list[np.ndarray]:
@@ -48,7 +48,7 @@ def _estimate_skew_angle(thresh: np.ndarray, search_range: float = 15.0) -> floa
     peaks when level). `minAreaRect` on the raw point cloud was tried first
     but is unreliable for sparse, mixed layouts (a title plus a few short
     header lines plus a table) -- verified empirically to report ~4 degrees
-    of "skew" on a perfectly level, digitally-rendered page.
+    of \"skew\" on a perfectly level, digitally-rendered page.
     """
     # Search on a downscaled copy purely for speed; the angle transfers.
     h, w = thresh.shape[:2]
@@ -90,6 +90,15 @@ def _normalize_resolution(gray: np.ndarray) -> np.ndarray:
     return cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
 
 
+def _crop_border(gray: np.ndarray, margin_frac: float = 0.005) -> np.ndarray:
+    """Crop a thin border margin to eliminate page-edge artifacts (scanner
+    shadows, camera vignetting) that confuse Tesseract layout analysis."""
+    h, w = gray.shape[:2]
+    m_h = max(1, int(h * margin_frac))
+    m_w = max(1, int(w * margin_frac))
+    return gray[m_h: h - m_h, m_w: w - m_w]
+
+
 def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
     """Erases ruled table borders before OCR.
 
@@ -97,15 +106,30 @@ def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
     grid-bordered table (border pixels get classified as part of the text
     region and confuse connected-component analysis) -- verified empirically
     against a ruled invoice table where 2 of 3 item rows were silently lost
-    without this step. Kernel lengths are sized relative to the image so
-    long ruling lines are erased while normal glyph strokes (even bold
-    headings) are left alone.
+    without this step.
+
+    Kernel lengths are sized relative to the image so long ruling lines are
+    erased while normal glyph strokes (even bold headings) are left alone.
+    Kernel sizes are larger than the original to reliably catch thick borders
+    typical of Indian invoice forms printed/scanned at 300 dpi.
     """
     h, w = gray.shape[:2]
-    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
 
-    h_len = max(25, w // 30)
-    v_len = max(25, h // 40)
+    # Try Otsu first; fall back to adaptive threshold for unevenly lit images
+    # (phone-camera captures often have non-uniform backgrounds that confuse
+    # global Otsu, producing very few foreground pixels and missing borders).
+    _, bw_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    if cv2.countNonZero(bw_otsu) < (h * w * 0.01):
+        # Fewer than 1% foreground pixels — Otsu probably failed; use adaptive
+        bw = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 10
+        )
+    else:
+        bw = bw_otsu
+
+    # Larger kernels (was w//30, h//40) to catch thick double-rule borders
+    h_len = max(40, w // 20)
+    v_len = max(40, h // 30)
     horiz = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1)))
     vert = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
     lines = cv2.dilate(cv2.bitwise_or(horiz, vert), cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
@@ -114,30 +138,66 @@ def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
     return cv2.bitwise_not(cleaned_bw)
 
 
+def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
+    """Isolate the main white paper document if photographed on a dark desk/surface."""
+    h, w = image_bgr.shape[:2]
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (9, 9), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return image_bgr
+
+    img_area = h * w
+    best_rect = None
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if 0.25 * img_area < area < 0.98 * img_area:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            if cw > 0.3 * w and ch > 0.3 * h:
+                best_rect = (x, y, cw, ch)
+                break
+
+    if best_rect:
+        x, y, cw, ch = best_rect
+        pad_x = int(0.01 * cw)
+        pad_y = int(0.01 * ch)
+        x0 = max(0, x - pad_x)
+        y0 = max(0, y - pad_y)
+        x1 = min(w, x + cw + pad_x)
+        y1 = min(h, y + ch + pad_y)
+        return image_bgr[y0:y1, x0:x1]
+
+    return image_bgr
+
+
+def _normalize_illumination(gray: np.ndarray) -> np.ndarray:
+    """Normalize non-uniform lighting / shadows from mobile camera captures."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
+    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    # Avoid zero division
+    background = np.maximum(background, 1)
+    normalized = np.uint8(np.clip((gray.astype(np.float32) / background.astype(np.float32)) * 255.0, 0, 255))
+    return normalized
+
+
 def preprocess_page(image_bgr: np.ndarray) -> np.ndarray:
     """Rotation correction, deskew, resolution normalization, contrast
-    enhancement, noise reduction, and grid-line removal (FR-02), returns a
-    binarized image ready for OCR.
-
-    Grid-line removal runs before deskew/CLAHE/denoise: those steps
-    resample every pixel (cubic interpolation, local contrast stretching),
-    which turns crisp 1px ruling lines into slightly blurred bands that the
-    line-removal morphology can no longer cleanly separate from adjacent
-    glyphs -- verified empirically to silently drop entire table rows when
-    ordered the other way round.
+    enhancement, noise reduction, border crop, and grid-line removal (FR-02).
+    Returns a binarized image ready for OCR.
     """
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    cropped_bgr = _crop_document_area(image_bgr)
+    gray = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2GRAY)
     gray = _normalize_resolution(gray)
+    gray = _normalize_illumination(gray)
+    gray = _crop_border(gray)
     gray = _remove_grid_lines(gray)
     gray = _deskew(gray)
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
 
-    # fastNlMeansDenoising gives marginally cleaner output but takes ~10s+
-    # on a 300dpi page, blowing the <5s/page target (TRD §16); median blur
-    # is near-instant and handles the salt-and-pepper noise typical of
-    # phone-camera captures just as well for OCR purposes.
     gray = cv2.medianBlur(gray, 3)
     return gray
 

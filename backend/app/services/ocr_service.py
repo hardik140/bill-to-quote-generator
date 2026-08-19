@@ -39,9 +39,20 @@ class OcrWord:
         return (self.block_num, self.par_num, self.line_num)
 
 
-def run_ocr(image_path: Path, lang: str | None = None) -> list[OcrWord]:
+def run_ocr(image_path: Path, lang: str | None = None, config: str | None = None) -> list[OcrWord]:
+    """Run Tesseract OCR on *image_path* and return a flat list of OcrWord
+    objects, one per recognised token.
+
+    ``config`` overrides the default Tesseract config string from settings.
+    Use ``--psm 4`` (single column of text blocks) for structured invoice
+    layouts — empirically shown to dramatically improve confidence scores
+    over the default auto-PSM on bordered Indian invoices.
+    """
     data = pytesseract.image_to_data(
-        str(image_path), lang=lang or settings.ocr_language, output_type=Output.DICT
+        str(image_path),
+        lang=lang or settings.ocr_language,
+        config=config if config is not None else settings.tesseract_config,
+        output_type=Output.DICT,
     )
     words: list[OcrWord] = []
     n = len(data["text"])

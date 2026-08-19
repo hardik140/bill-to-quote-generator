@@ -11,6 +11,7 @@ from app.utils.ids import new_id
 
 if TYPE_CHECKING:
     from app.models.bill import Bill
+    from app.models.scenario_item import ScenarioItem
 
 
 class BillItem(Base):
@@ -18,7 +19,7 @@ class BillItem(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     bill_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("bills.id"), nullable=False, index=True
+        String(36), ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     serial_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -42,3 +43,6 @@ class BillItem(Base):
     user_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     bill: Mapped["Bill"] = relationship(back_populates="items")
+    scenario_items: Mapped[list["ScenarioItem"]] = relationship(
+        back_populates="source_item", cascade="all, delete-orphan", passive_deletes=True
+    )

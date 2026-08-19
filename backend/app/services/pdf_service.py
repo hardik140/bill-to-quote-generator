@@ -28,27 +28,77 @@ from app.models.scenario import TYPE_BASELINE, Scenario
 from app.utils.file_validation import sanitize_output_filename
 
 _styles = getSampleStyleSheet()
-_title_style = ParagraphStyle("QuoteTitle", parent=_styles["Title"], fontSize=16)
-_disclaimer_style = ParagraphStyle(
-    "Disclaimer",
+_vendor_title_style = ParagraphStyle(
+    "VendorTitle",
     parent=_styles["Normal"],
-    fontSize=10,
-    textColor=colors.HexColor("#8a1f11"),
-    borderColor=colors.HexColor("#8a1f11"),
-    borderWidth=1,
-    borderPadding=6,
-    backColor=colors.HexColor("#fdecea"),
-    spaceBefore=8,
-    spaceAfter=8,
+    fontSize=13,
+    leading=15,
+    fontName="Helvetica-Bold",
+    textColor=colors.HexColor("#0f172a"),
+    alignment=1,
 )
-_baseline_note_style = ParagraphStyle(
-    "BaselineNote",
+_vendor_sub_style = ParagraphStyle(
+    "VendorSub",
     parent=_styles["Normal"],
-    fontSize=10,
-    textColor=colors.HexColor("#0f5132"),
-    spaceBefore=8,
-    spaceAfter=8,
+    fontSize=8,
+    leading=11,
+    fontName="Helvetica-Oblique",
+    textColor=colors.HexColor("#475569"),
+    alignment=1,
 )
+_vendor_meta_style = ParagraphStyle(
+    "VendorMeta",
+    parent=_styles["Normal"],
+    fontSize=8.5,
+    leading=11,
+    fontName="Helvetica",
+    textColor=colors.HexColor("#334155"),
+    alignment=1,
+)
+_quotation_title_style = ParagraphStyle(
+    "QuotationTitle",
+    parent=_styles["Normal"],
+    fontSize=11,
+    leading=14,
+    fontName="Helvetica-Bold",
+    textColor=colors.HexColor("#0f172a"),
+    alignment=1,
+)
+
+DEFAULT_VENDOR_DETAILS = {
+    "scenario_a": {
+        "name": "DELHI STATIONERY HOUSE",
+        "gstin": "6AEWPK0704K1ZB",
+        "tagline": "Deals In: All Type of Office Stationery, Computer Stationery, File Cover, Pens, Paper & Register",
+        "address": "Near Kirorimal Mandir, Chiripal Mohalla, Gali LokManya, BHIWANI-127021",
+        "phone": "9215844061",
+    },
+    "scenario_b": {
+        "name": "ANAND PAPER MART",
+        "gstin": "06AIZPK9816H1ZJ",
+        "tagline": "MARRIAGE CARD, STATIONERY & ALL TYPES OF PAPER SUPPLIER",
+        "address": "119, GAUSHALA MARKET, BHIWANI-127021 (HR.)",
+        "phone": "9215846479",
+    },
+    "scenario_c": {
+        "name": "FUTURE TRADERS",
+        "gstin": None,
+        "tagline": None,
+        "address": "Halu Bazar, Bhiwani (Hr.) 127021",
+        "phone": None,
+    },
+}
+
+
+def _get_vendor_info(scenario: Scenario) -> dict:
+    label = scenario.label.lower()
+    if scenario.scenario_type == TYPE_BASELINE or "scenario a" in label or "baseline" in label:
+        return DEFAULT_VENDOR_DETAILS["scenario_a"]
+    if "scenario b" in label:
+        return DEFAULT_VENDOR_DETAILS["scenario_b"]
+    if "scenario c" in label:
+        return DEFAULT_VENDOR_DETAILS["scenario_c"]
+    return DEFAULT_VENDOR_DETAILS["scenario_a"]
 
 
 def _filename_for(scenario: Scenario) -> str:
@@ -74,80 +124,73 @@ def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
     doc = SimpleDocTemplate(
         str(out_path),
         pagesize=A4,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
         leftMargin=16 * mm,
         rightMargin=16 * mm,
     )
 
     elements = []
-    elements.append(Paragraph(scenario.label, _title_style))
-    elements.append(
-        Paragraph(f"Generated: {datetime.utcnow().strftime('%d-%b-%Y %H:%M UTC')}", _styles["Normal"])
-    )
-    elements.append(Spacer(1, 6))
 
-    if scenario.scenario_type == TYPE_BASELINE:
-        elements.append(Paragraph(scenario.disclaimer, _baseline_note_style))
-    else:
-        elements.append(Paragraph(f"<b>{scenario.disclaimer}</b>", _disclaimer_style))
-        elements.append(
-            Paragraph(
-                f"Markup applied over baseline rate: {scenario.markup_percent}%. "
-                "This document is an internally generated estimate for budgeting "
-                "and comparison only and does not represent a genuine vendor quotation.",
-                _styles["Normal"],
-            )
-        )
+    # Vendor Header Box
+    vendor = _get_vendor_info(scenario)
+    vendor_flowables = [Paragraph(f"<b>{vendor['name']}</b>", _vendor_title_style)]
+    if vendor.get("tagline"):
+        vendor_flowables.append(Spacer(1, 2))
+        vendor_flowables.append(Paragraph(f"<i>{vendor['tagline']}</i>", _vendor_sub_style))
 
-    elements.append(Spacer(1, 10))
+    meta_parts = []
+    if vendor.get("address"):
+        meta_parts.append(vendor["address"])
+    if vendor.get("phone"):
+        meta_parts.append(f"Phone: {vendor['phone']}")
+    if meta_parts:
+        vendor_flowables.append(Spacer(1, 2))
+        vendor_flowables.append(Paragraph(" &bull; ".join(meta_parts), _vendor_meta_style))
 
-    header_rows = [
-        ["Vendor (source document)", bill.vendor_name or "-"],
-        ["Invoice / Reference No.", bill.invoice_number or "-"],
-        ["Invoice Date", bill.invoice_date.isoformat() if bill.invoice_date else "-"],
-        ["Buyer", bill.buyer_name or "-"],
-        ["Currency", bill.currency],
-        ["Rounding Policy", scenario.rounding_mode],
-    ]
-    header_table = Table(header_rows, colWidths=[55 * mm, 110 * mm])
-    header_table.setStyle(
+    if vendor.get("gstin"):
+        vendor_flowables.append(Spacer(1, 2))
+        vendor_flowables.append(Paragraph(f"<b>GSTIN:</b> {vendor['gstin']}", _vendor_meta_style))
+
+    vendor_box = Table([[vendor_flowables]], colWidths=[178 * mm])
+    vendor_box.setStyle(
         TableStyle(
             [
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#555555")),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#cbd5e1")),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ]
         )
     )
-    elements.append(header_table)
-    elements.append(Spacer(1, 12))
+    elements.append(vendor_box)
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph("QUOTATION", _quotation_title_style))
+    elements.append(Spacer(1, 8))
 
-    item_header = ["#", "Description", "Qty", "Unit", "Rate", "Tax", "Amount"]
+    item_header = ["#", "Product", "Rate"]
     item_rows = [item_header]
     for idx, item in enumerate(scenario.items, start=1):
         item_rows.append(
             [
                 str(idx),
                 item.description,
-                f"{item.quantity:g}" if item.quantity == item.quantity.to_integral_value() else str(item.quantity),
-                item.unit or "-",
                 _money(item.adjusted_rate),
-                _money(item.tax_amount),
-                _money(item.total_amount),
             ]
         )
 
-    item_table = Table(item_rows, colWidths=[8 * mm, 62 * mm, 15 * mm, 15 * mm, 25 * mm, 22 * mm, 25 * mm], repeatRows=1)
+    item_table = Table(item_rows, colWidths=[12 * mm, 130 * mm, 36 * mm], repeatRows=1)
     item_table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+                ("ALIGN", (2, 0), (2, -1), "RIGHT"),
                 ("ALIGN", (0, 0), (0, -1), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f7f7")]),
@@ -157,40 +200,6 @@ def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
         )
     )
     elements.append(item_table)
-    elements.append(Spacer(1, 10))
-
-    summary_rows = [
-        ["Subtotal", _money(scenario.subtotal)],
-        ["Tax", _money(scenario.tax_total)],
-        ["Grand Total", _money(scenario.grand_total)],
-    ]
-    summary_table = Table(summary_rows, colWidths=[140 * mm, 32 * mm])
-    summary_table.setStyle(
-        TableStyle(
-            [
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.black),
-                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    elements.append(summary_table)
-    elements.append(Spacer(1, 16))
-
-    footer_text = (
-        "This document was generated locally for internal procurement, budgeting, "
-        "comparison, and scenario-analysis purposes only."
-        if scenario.scenario_type == TYPE_BASELINE
-        else (
-            "No vendor signature, seal, GSTIN, or bank detail on this document "
-            "should be relied upon as authentic -- this is an internally generated "
-            "simulation and must not be treated as a real vendor quotation."
-        )
-    )
-    elements.append(Paragraph(footer_text, _styles["Italic"]))
 
     doc.build(elements)
     return out_path

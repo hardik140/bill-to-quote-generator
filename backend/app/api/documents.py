@@ -12,7 +12,7 @@ from app.schemas.document import (
     DocumentUploadResponse,
 )
 from app.services.extraction_service import ExtractionError, extract_document
-from app.services.storage_service import save_upload
+from app.services.storage_service import delete_document_storage, save_upload
 from app.utils.file_validation import UploadValidationError
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -69,8 +69,6 @@ def list_documents(limit: int = 50, offset: int = 0, db: Session = Depends(get_d
                 original_filename=doc.original_filename,
                 uploaded_at=doc.uploaded_at,
                 status=doc.status,
-                vendor_name=bill.vendor_name if bill else None,
-                invoice_number=bill.invoice_number if bill else None,
                 grand_total=bill.grand_total if bill else None,
                 scenario_count=scenario_count,
             )
@@ -102,3 +100,19 @@ def list_files(document_id: str, db: Session = Depends(get_db)) -> DocumentFiles
         raise HTTPException(status_code=404, detail="Document not found.")
     files = generated_file_repository.list_for_document(db, document_id)
     return DocumentFilesResponse(files=files)
+
+
+@router.delete("/{document_id}", status_code=204)
+def delete_document(document_id: str, db: Session = Depends(get_db)) -> None:
+    document = document_repository.get(db, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    bill = bill_repository.get_by_document(db, document_id)
+    bill_id = bill.id if bill else None
+    stored_filename = document.stored_filename
+
+    document_repository.delete(db, document)
+    db.commit()
+
+    delete_document_storage(stored_filename, document_id, bill_id)

@@ -43,6 +43,7 @@ class ScenarioOut(BaseModel):
     tax_total: Decimal
     grand_total: Decimal
     disclaimer: str | None = None
+
     created_at: datetime
     items: list[ScenarioItemOut] = []
 

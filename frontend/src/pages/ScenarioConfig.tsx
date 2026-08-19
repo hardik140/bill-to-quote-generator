@@ -87,7 +87,8 @@ export default function ScenarioConfig() {
     <Layout>
       <h1 className="mb-1 text-xl font-semibold">Configure scenarios</h1>
       <p className="mb-6 text-sm text-slate-500">
-        Baseline total: <span className="font-medium text-slate-700">{formatMoney(bill.grand_total, bill.currency)}</span>
+        Baseline total:{' '}
+        <span className="font-medium text-slate-700">{formatMoney(bill.grand_total, bill.currency)}</span>
       </p>
 
       {error && (
@@ -139,8 +140,8 @@ export default function ScenarioConfig() {
 
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
           Scenario B and C will be clearly labelled{' '}
-          <strong>SIMULATED / INTERNAL ESTIMATE — NOT A VENDOR QUOTATION</strong>. They are internal estimates for
-          budgeting and comparison only and do not represent genuine third-party quotations.
+          <strong>SIMULATED / INTERNAL ESTIMATE — NOT A VENDOR QUOTATION</strong>. They are internal
+          estimates for budgeting and comparison only.
         </div>
 
         <button

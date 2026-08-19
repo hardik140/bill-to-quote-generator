@@ -11,13 +11,12 @@ from fastapi.testclient import TestClient
 
 from app.models.scenario import BASELINE_LABEL, SIMULATION_DISCLAIMER
 
-# Known-good values from scripts/generate_fixture_invoice.py, used to patch
-# over any OCR field the pipeline didn't confidently recover, so this test
-# exercises confirm/scenario/PDF regardless of OCR variance on the table.
-EXPECTED_ITEMS = {
-    "A4 Paper Rim 75 GSM": {"quantity": Decimal("1"), "taxable_rate": Decimal("240.00"), "gst_rate": Decimal("18")},
-    "Ball Pen Blue": {"quantity": Decimal("10"), "taxable_rate": Decimal("8.00"), "gst_rate": Decimal("12")},
-    "Stapler No. 10": {"quantity": Decimal("2"), "taxable_rate": Decimal("45.00"), "gst_rate": Decimal("18")},
+# Known-good rate values from the fixture invoice, used to patch
+# any OCR uncertainty before confirming.
+EXPECTED_RATES = {
+    "A4 Paper Rim 75 GSM": Decimal("240.00"),
+    "Ball Pen Blue": Decimal("8.00"),
+    "Stapler No. 10": Decimal("45.00"),
 }
 
 
@@ -40,21 +39,17 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
     document_id, bill_id = _upload_and_extract(client, sample_invoice_path)
 
     bill = client.get(f"/api/bills/{bill_id}").json()
-    assert bill["vendor_name"] == "Delhi Stationery House"
-    assert bill["invoice_number"] == "DSH/26-27/0896"
     assert len(bill["items"]) == 3
 
     # Patch any OCR-uncertain fields to known-good values before confirming,
     # exactly like a human reviewer would in FR-05.
     for item in bill["items"]:
-        expected = next((v for k, v in EXPECTED_ITEMS.items() if k in item["description"]), None)
-        assert expected is not None, f"unexpected item description: {item['description']}"
+        expected_rate = next((v for k, v in EXPECTED_RATES.items() if k in item["description"]), None)
+        assert expected_rate is not None, f"unexpected item description: {item['description']}"
         resp = client.put(
             f"/api/bills/{bill_id}/items/{item['id']}",
             json={
-                "quantity": str(expected["quantity"]),
-                "taxable_rate": str(expected["taxable_rate"]),
-                "gst_rate": str(expected["gst_rate"]),
+                "rate": str(expected_rate),
             },
         )
         assert resp.status_code == 200, resp.text
@@ -62,17 +57,18 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
         assert updated["user_verified"] is True
 
     bill = client.get(f"/api/bills/{bill_id}").json()
-    # 240 + 80 + 90 = 410 subtotal; tax = 43.2 + 9.6 + 16.2 = 69.0
-    assert Decimal(str(bill["subtotal"])) == Decimal("410.00")
-    assert Decimal(str(bill["tax_total"])) == Decimal("69.00")
-    assert Decimal(str(bill["grand_total"])) == Decimal("479.00")
+    # 240.00 + 8.00 + 45.00 = 293.00
+    assert Decimal(str(bill["grand_total"])) == Decimal("293.00")
 
     confirm = client.post(f"/api/bills/{bill_id}/confirm")
     assert confirm.status_code == 200, confirm.text
     assert confirm.json()["confirmed"] is True
 
     # Editing after confirmation must be rejected (bill is now immutable).
-    locked = client.put(f"/api/bills/{bill_id}", json={"vendor_name": "Should Not Apply"})
+    locked = client.put(
+        f"/api/bills/{bill_id}/items/{bill['items'][0]['id']}",
+        json={"rate": "999.00"},
+    )
     assert locked.status_code == 409
 
     scen_resp = client.post(
@@ -86,7 +82,7 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
     scenarios = [client.get(f"/api/scenarios/{sid}").json() for sid in scenario_ids]
     baseline, scenario_b, scenario_c = scenarios
 
-    assert baseline["grand_total"] == "479.00" or Decimal(str(baseline["grand_total"])) == Decimal("479.00")
+    assert Decimal(str(baseline["grand_total"])) == Decimal("293.00")
     assert Decimal(str(scenario_b["grand_total"])) > Decimal(str(baseline["grand_total"]))
     assert Decimal(str(scenario_c["grand_total"])) > Decimal(str(scenario_b["grand_total"]))
 
@@ -107,12 +103,11 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
         doc = fitz.open(path)
         try:
             text = "\n".join(page.get_text() for page in doc)
+            assert "QUOTATION" in text
+            assert "Total" not in text
+            assert "Rs." in text
         finally:
             doc.close()
-        if "Scenario B" in label or "Scenario C" in label:
-            assert SIMULATION_DISCLAIMER in text
-        else:
-            assert BASELINE_LABEL in text
 
 
 def test_cannot_generate_scenarios_before_confirmation(client: TestClient, sample_invoice_path: Path):
@@ -132,5 +127,74 @@ def test_document_list_reflects_history(client: TestClient, sample_invoice_path:
     assert resp.status_code == 200
     docs = resp.json()["documents"]
     match = next(d for d in docs if d["id"] == document_id)
-    assert match["vendor_name"] == "Delhi Stationery House"
+    assert match["original_filename"] == sample_invoice_path.name
     assert match["status"] == "processed"
+
+
+def test_delete_document(client: TestClient, sample_invoice_path: Path):
+    document_id, _ = _upload_and_extract(client, sample_invoice_path)
+
+    # Verify document exists in list
+    resp = client.get("/api/documents")
+    assert resp.status_code == 200
+    docs = resp.json()["documents"]
+    assert any(d["id"] == document_id for d in docs)
+
+    # Delete document
+    del_resp = client.delete(f"/api/documents/{document_id}")
+    assert del_resp.status_code == 204
+
+    # Verify document is removed from list
+    resp = client.get("/api/documents")
+    assert resp.status_code == 200
+    docs = resp.json()["documents"]
+    assert not any(d["id"] == document_id for d in docs)
+
+    # Verify document detail returns 404
+    get_resp = client.get(f"/api/documents/{document_id}")
+    assert get_resp.status_code == 404
+
+
+def test_delete_document_with_scenarios_and_files(client: TestClient, sample_invoice_path: Path):
+    document_id, bill_id = _upload_and_extract(client, sample_invoice_path)
+
+    # Confirm bill
+    confirm = client.post(f"/api/bills/{bill_id}/confirm")
+    assert confirm.status_code == 200
+
+    # Generate scenarios
+    scen_resp = client.post(
+        f"/api/bills/{bill_id}/scenarios",
+        json={"scenario_b_markup_percent": "10", "scenario_c_markup_percent": "20", "rounding": "nearest_1"},
+    )
+    assert scen_resp.status_code == 200
+    scenario_ids = scen_resp.json()["scenario_ids"]
+
+    # Generate PDFs
+    for sid in scenario_ids:
+        pdf_resp = client.post(f"/api/scenarios/{sid}/pdf")
+        assert pdf_resp.status_code == 200
+
+    # Verify files exist in API
+    files_resp = client.get(f"/api/documents/{document_id}/files")
+    assert files_resp.status_code == 200
+    assert len(files_resp.json()["files"]) == 3
+
+    # Delete the document
+    del_resp = client.delete(f"/api/documents/{document_id}")
+    assert del_resp.status_code == 204
+
+    # Verify document is removed from list
+    resp = client.get("/api/documents")
+    assert resp.status_code == 200
+    assert not any(d["id"] == document_id for d in resp.json()["documents"])
+
+    # Verify document detail returns 404
+    get_resp = client.get(f"/api/documents/{document_id}")
+    assert get_resp.status_code == 404
+
+    # Verify files query returns 404
+    files_after = client.get(f"/api/documents/{document_id}/files")
+    assert files_after.status_code == 404
+
+

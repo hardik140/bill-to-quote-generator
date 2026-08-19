@@ -1,26 +1,18 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field
 
 from app.core.config import settings
 
 
 class BillItemOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     serial_no: int
     description: str
-    hsn_sac: str | None = None
-    gst_rate: Decimal
-    quantity: Decimal
-    unit: str | None = None
-    source_rate: Decimal
-    taxable_rate: Decimal
-    line_amount: Decimal
-    tax_amount: Decimal
-    total_amount: Decimal
+    rate: Decimal = Field(validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
     confidence: Decimal | None = None
     user_verified: bool
 
@@ -37,13 +29,6 @@ class BillOut(BaseModel):
 
     id: str
     document_id: str
-    vendor_name: str | None = None
-    vendor_address: str | None = None
-    vendor_gstin: str | None = None
-    invoice_number: str | None = None
-    invoice_date: date | None = None
-    buyer_name: str | None = None
-    buyer_address: str | None = None
     currency: str
     subtotal: Decimal
     tax_total: Decimal
@@ -55,35 +40,18 @@ class BillOut(BaseModel):
     items: list[BillItemOut] = []
 
 
-class BillUpdate(BaseModel):
-    vendor_name: str | None = None
-    vendor_address: str | None = None
-    vendor_gstin: str | None = None
-    invoice_number: str | None = None
-    invoice_date: date | None = None
-    buyer_name: str | None = None
-    buyer_address: str | None = None
-    currency: str | None = None
-
-
 class BillItemUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     description: str | None = None
-    hsn_sac: str | None = None
-    gst_rate: Decimal | None = None
-    quantity: Decimal | None = None
-    unit: str | None = None
-    source_rate: Decimal | None = None
-    taxable_rate: Decimal | None = None
+    rate: Decimal | None = Field(default=None, validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
 
 
 class BillItemCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     description: str
-    hsn_sac: str | None = None
-    gst_rate: Decimal = Decimal("0")
-    quantity: Decimal
-    unit: str | None = None
-    source_rate: Decimal
-    taxable_rate: Decimal | None = None
+    rate: Decimal = Field(validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
 
 
 class ItemReorderRequest(BaseModel):

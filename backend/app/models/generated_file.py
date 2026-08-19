@@ -17,7 +17,9 @@ class GeneratedFile(Base):
     __tablename__ = "generated_files"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    scenario_id: Mapped[str] = mapped_column(String(36), ForeignKey("scenarios.id"), nullable=False)
+    scenario_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False
+    )
 
     file_type: Mapped[str] = mapped_column(String(20), default="pdf", nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)

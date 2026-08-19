@@ -1,5 +1,5 @@
-// Mirrors backend/app/schemas/*.py. Money/quantity fields arrive as
-// numbers (Pydantic Decimal -> JSON) and are formatted for display only;
+// Mirrors backend/app/schemas/*.py. Money fields arrive as numbers
+// (Pydantic Decimal -> JSON) and are formatted for display only;
 // all real arithmetic happens server-side with Decimal (TRD FR-06).
 
 export interface DocumentUploadResponse {
@@ -18,8 +18,6 @@ export interface DocumentSummary {
   original_filename: string
   uploaded_at: string
   status: string
-  vendor_name: string | null
-  invoice_number: string | null
   grand_total: number | null
   scenario_count: number
 }
@@ -48,15 +46,7 @@ export interface BillItemOut {
   id: string
   serial_no: number
   description: string
-  hsn_sac: string | null
-  gst_rate: number
-  quantity: number
-  unit: string | null
-  source_rate: number
-  taxable_rate: number
-  line_amount: number
-  tax_amount: number
-  total_amount: number
+  rate: number
   confidence: number | null
   user_verified: boolean
   low_confidence: boolean
@@ -65,13 +55,6 @@ export interface BillItemOut {
 export interface BillOut {
   id: string
   document_id: string
-  vendor_name: string | null
-  vendor_address: string | null
-  vendor_gstin: string | null
-  invoice_number: string | null
-  invoice_date: string | null
-  buyer_name: string | null
-  buyer_address: string | null
   currency: string
   subtotal: number
   tax_total: number
@@ -83,35 +66,14 @@ export interface BillOut {
   items: BillItemOut[]
 }
 
-export interface BillUpdate {
-  vendor_name?: string | null
-  vendor_address?: string | null
-  vendor_gstin?: string | null
-  invoice_number?: string | null
-  invoice_date?: string | null
-  buyer_name?: string | null
-  buyer_address?: string | null
-  currency?: string | null
-}
-
 export interface BillItemUpdate {
   description?: string
-  hsn_sac?: string | null
-  gst_rate?: number
-  quantity?: number
-  unit?: string | null
-  source_rate?: number
-  taxable_rate?: number
+  rate?: number
 }
 
 export interface BillItemCreate {
   description: string
-  hsn_sac?: string | null
-  gst_rate?: number
-  quantity: number
-  unit?: string | null
-  source_rate: number
-  taxable_rate?: number | null
+  rate: number
 }
 
 export type RoundingMode = 'none' | 'nearest_1' | 'nearest_5' | 'nearest_10'

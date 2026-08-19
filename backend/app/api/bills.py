@@ -11,13 +11,12 @@ from app.schemas.bill import (
     BillItemOut,
     BillItemUpdate,
     BillOut,
-    BillUpdate,
     ConfirmResponse,
     ItemReorderRequest,
 )
 from app.schemas.scenario import ScenarioOut
 from app.services.calculation_service import compute_bill_totals, compute_line
-from app.services.validation_service import ValidationError, validate_gst_rate, validate_quantity, validate_rate
+from app.services.validation_service import ValidationError, validate_quantity, validate_rate
 
 router = APIRouter(prefix="/api/bills", tags=["bills"])
 
@@ -45,19 +44,6 @@ def get_bill(bill_id: str, db: Session = Depends(get_db)) -> BillOut:
     return BillOut.model_validate(bill)
 
 
-@router.put("/{bill_id}", response_model=BillOut)
-def update_bill(bill_id: str, payload: BillUpdate, db: Session = Depends(get_db)) -> BillOut:
-    bill = _get_bill_or_404(db, bill_id)
-    if bill.confirmed:
-        raise HTTPException(status_code=409, detail="Confirmed bills cannot be edited.")
-
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(bill, field, value)
-    db.commit()
-    db.refresh(bill)
-    return BillOut.model_validate(bill)
-
-
 @router.post("/{bill_id}/items", response_model=BillItemOut)
 def add_item(bill_id: str, payload: BillItemCreate, db: Session = Depends(get_db)) -> BillItemOut:
     bill = _get_bill_or_404(db, bill_id)
@@ -65,14 +51,13 @@ def add_item(bill_id: str, payload: BillItemCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=409, detail="Confirmed bills cannot be edited.")
 
     try:
-        quantity = validate_quantity(payload.quantity)
-        source_rate = validate_rate(payload.source_rate)
-        taxable_rate = validate_rate(payload.taxable_rate if payload.taxable_rate is not None else payload.source_rate)
-        gst_rate = validate_gst_rate(payload.gst_rate)
+        rate = validate_rate(payload.rate)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
 
-    line_result = compute_line(quantity, taxable_rate, gst_rate)
+    quantity = Decimal("1")
+    gst_rate = Decimal("0")
+    line_result = compute_line(quantity, rate, gst_rate)
     next_serial = (max((i.serial_no for i in bill.items), default=0)) + 1
 
     item = bill_repository.add_item(
@@ -80,12 +65,12 @@ def add_item(bill_id: str, payload: BillItemCreate, db: Session = Depends(get_db
         bill,
         serial_no=next_serial,
         description=payload.description,
-        hsn_sac=payload.hsn_sac,
+        hsn_sac=None,
         gst_rate=gst_rate,
         quantity=quantity,
-        unit=payload.unit,
-        source_rate=source_rate,
-        taxable_rate=taxable_rate,
+        unit=None,
+        source_rate=rate,
+        taxable_rate=rate,
         line_amount=line_result.line_amount,
         tax_amount=line_result.tax_amount,
         total_amount=line_result.total_amount,
@@ -112,22 +97,20 @@ def update_item(
     if item is None or item.bill_id != bill_id:
         raise HTTPException(status_code=404, detail="Item not found.")
 
-    updates = payload.model_dump(exclude_unset=True)
-    for field, value in updates.items():
-        setattr(item, field, value)
+    if payload.description is not None:
+        item.description = payload.description
+    if payload.rate is not None:
+        try:
+            rate = validate_rate(payload.rate)
+        except ValidationError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        item.source_rate = rate
+        item.taxable_rate = rate
 
-    try:
-        quantity = validate_quantity(item.quantity)
-        taxable_rate = validate_rate(item.taxable_rate)
-        if item.source_rate is None:
-            item.source_rate = taxable_rate
-        validate_rate(item.source_rate)
-        gst_rate = validate_gst_rate(item.gst_rate)
-    except ValidationError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=exc.message) from exc
-
-    line_result = compute_line(quantity, taxable_rate, gst_rate)
+    quantity = item.quantity if item.quantity and item.quantity > 0 else Decimal("1")
+    gst_rate = item.gst_rate if item.gst_rate is not None else Decimal("0")
+    line_result = compute_line(quantity, item.taxable_rate, gst_rate)
     item.line_amount = line_result.line_amount
     item.tax_amount = line_result.tax_amount
     item.total_amount = line_result.total_amount
@@ -187,7 +170,6 @@ def confirm_bill(bill_id: str, db: Session = Depends(get_db)) -> ConfirmResponse
         try:
             validate_quantity(item.quantity)
             validate_rate(item.taxable_rate)
-            validate_gst_rate(item.gst_rate)
         except ValidationError as exc:
             raise HTTPException(
                 status_code=400,

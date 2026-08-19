@@ -27,7 +27,7 @@ class Bill(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     document_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("documents.id"), nullable=False, unique=True
+        String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, unique=True
     )
 
     vendor_name: Mapped[str | None] = mapped_column(String(255))
