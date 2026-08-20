@@ -11,7 +11,10 @@ from pytesseract import Output
 
 from app.core.config import settings
 
-pytesseract.pytesseract.tesseract_cmd = settings.resolved_tesseract_cmd()
+try:
+    pytesseract.pytesseract.tesseract_cmd = settings.resolved_tesseract_cmd()
+except Exception:
+    pass
 
 
 @dataclass(frozen=True)

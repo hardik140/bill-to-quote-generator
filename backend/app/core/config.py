@@ -63,14 +63,15 @@ class Settings(BaseSettings):
         return self.storage_root / "temp"
 
     def resolved_tesseract_cmd(self) -> str:
-        if Path(self.tesseract_cmd).exists():
+        if self.tesseract_cmd and Path(self.tesseract_cmd).exists():
             return self.tesseract_cmd
         found = shutil.which("tesseract")
         if found:
             return found
-        raise RuntimeError(
-            "Tesseract binary not found. Set APP_TESSERACT_CMD to its full path."
-        )
+        for common_path in ("/usr/bin/tesseract", "/usr/local/bin/tesseract"):
+            if Path(common_path).exists():
+                return common_path
+        return "tesseract"
 
     def resolved_poppler_path(self) -> str | None:
         if Path(self.poppler_path).exists():

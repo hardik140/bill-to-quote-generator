@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+storage/uploads/*
+storage/images/*
+storage/generated/*
+storage/temp/*
+!storage/uploads/.gitkeep
+!storage/images/.gitkeep
+!storage/generated/.gitkeep
+!storage/temp/.gitkeep
+data/app.db
+.env
+.venv
