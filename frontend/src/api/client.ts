@@ -15,7 +15,17 @@ import type {
   ScenarioPdfResponse,
 } from '../types'
 
-const http = axios.create({ baseURL: '/' })
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? 'https://bill-to-quote-generator.onrender.com' : '')
+
+const http = axios.create({ baseURL: API_BASE_URL || '/' })
+
+export function getFileUrl(path: string): string {
+  if (!path) return ''
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  return API_BASE_URL ? `${API_BASE_URL}${cleanPath}` : cleanPath
+}
 
 export function apiErrorMessage(err: unknown, fallback = 'Something went wrong.'): string {
   if (axios.isAxiosError(err)) {

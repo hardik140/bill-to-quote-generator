@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiErrorMessage, billsApi, documentsApi, scenariosApi } from '../api/client'
+import { apiErrorMessage, billsApi, documentsApi, getFileUrl, scenariosApi } from '../api/client'
 import type { DocumentDetail, ScenarioOut } from '../types'
 import Layout from '../components/Layout'
 import { formatMoney } from '../lib/format'
@@ -128,7 +128,7 @@ export default function ResultScreen() {
                     <div className="flex items-center justify-end gap-3">
                       {pdfPath ? (
                         <a
-                          href={`/files/generated/${s.bill_id}/${pdfPath.split(/[\\/]/).pop()}`}
+                          href={getFileUrl(`/files/generated/${s.bill_id}/${pdfPath.split(/[\\/]/).pop()}`)}
                           target="_blank"
                           rel="noreferrer"
                           className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
