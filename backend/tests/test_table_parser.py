@@ -204,3 +204,47 @@ def test_stop_lines_extended():
     assert items[0].description == "Item One"
 
 
+def test_multiline_description_merging():
+    rows = [
+        ["S.No", "Description", "Qty", "Rate", "Amount"],
+        ["1", "Heavy Duty Steel Stapler", "2", "150.00", "300.00"],
+        ["", "With 1000 Extra Pins Free", "", "", ""],
+        ["2", "Executive Ball Pen", "5", "20.00", "100.00"],
+    ]
+    words = make_words(rows, col_count=5)
+    lines = group_lines(words)
+    items = parse_table(lines)
+
+    assert len(items) == 2
+    assert "With 1000 Extra Pins Free" in items[0].description
+    assert items[0].taxable_rate == Decimal("150.00")
+    assert items[1].description == "Executive Ball Pen"
+
+
+def test_headerless_receipt_parsing():
+    rows = [
+        ["Cafe Coffee Latte", "1", "180.00"],
+        ["Chocolate Brownie", "2", "220.00"],
+    ]
+    words = make_words(rows, col_count=3)
+    lines = group_lines(words)
+    items = parse_table(lines)
+
+    assert len(items) == 2
+    assert "Cafe Coffee Latte" in items[0].description
+    assert items[0].taxable_rate == Decimal("180.00")
+    assert "Chocolate Brownie" in items[1].description
+    assert items[1].taxable_rate == Decimal("220.00")
+
+
+def test_currency_symbol_cleanup():
+    from app.services.normalization_service import parse_decimal_loose
+
+    assert parse_decimal_loose("₹ 1,500.00") == Decimal("1500.00")
+    assert parse_decimal_loose("Rs. 250/-") == Decimal("250")
+    assert parse_decimal_loose("INR 99.50") == Decimal("99.50")
+    assert parse_decimal_loose("$ 45.00") == Decimal("45.00")
+    assert parse_decimal_loose("240 . 00") == Decimal("240.00")
+
+
+

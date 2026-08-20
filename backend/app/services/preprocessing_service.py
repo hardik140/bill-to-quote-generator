@@ -9,12 +9,58 @@ import fitz  # PyMuPDF
 import numpy as np
 from PIL import Image
 
-MIN_WIDTH_PX = 2000  # raised from 1600 — extra pixels give Tesseract cleaner glyphs
+from app.services.ocr_service import OcrWord
+
+MIN_WIDTH_PX = 2000
+
+
+def extract_digital_pdf_words(pdf_path: Path) -> list[list[OcrWord]] | None:
+    """Extract native digital words and bounding boxes directly from a vector PDF.
+    Returns a list of word lists (one per page), or None if the PDF has little or
+    no extractable text (e.g. scanned image).
+    """
+    doc = fitz.open(pdf_path)
+    pages_words: list[list[OcrWord]] = []
+    total_words = 0
+    try:
+        scale = 300.0 / 72.0
+        for page in doc:
+            words_data = page.get_text("words")
+            page_words: list[OcrWord] = []
+            for w in words_data:
+                x0, y0, x1, y1, text, block_no, line_no, _ = w
+                text_clean = text.strip()
+                if not text_clean:
+                    continue
+                left = int(x0 * scale)
+                top = int(y0 * scale)
+                width = max(1, int((x1 - x0) * scale))
+                height = max(1, int((y1 - y0) * scale))
+                page_words.append(
+                    OcrWord(
+                        text=text_clean,
+                        confidence=100.0,
+                        left=left,
+                        top=top,
+                        width=width,
+                        height=height,
+                        line_num=int(line_no),
+                        block_num=int(block_no),
+                        par_num=1,
+                    )
+                )
+            pages_words.append(page_words)
+            total_words += len(page_words)
+    finally:
+        doc.close()
+
+    if total_words < 8:
+        return None
+    return pages_words
 
 
 def pdf_to_page_images(pdf_path: Path, dpi: int = 300) -> list[np.ndarray]:
-    """Render each PDF page to a BGR numpy image via PyMuPDF (no poppler
-    dependency needed for this path since PyMuPDF renders natively)."""
+    """Render each PDF page to a BGR numpy image via PyMuPDF."""
     images: list[np.ndarray] = []
     doc = fitz.open(pdf_path)
     try:
@@ -43,14 +89,6 @@ def _projection_variance(binary: np.ndarray, angle: float) -> float:
 
 
 def _estimate_skew_angle(thresh: np.ndarray, search_range: float = 15.0) -> float:
-    """Projection-profile skew estimate: the correct rotation maximizes the
-    variance of per-row foreground pixel counts (text lines form sharp
-    peaks when level). `minAreaRect` on the raw point cloud was tried first
-    but is unreliable for sparse, mixed layouts (a title plus a few short
-    header lines plus a table) -- verified empirically to report ~4 degrees
-    of \"skew\" on a perfectly level, digitally-rendered page.
-    """
-    # Search on a downscaled copy purely for speed; the angle transfers.
     h, w = thresh.shape[:2]
     scale = min(1.0, 800.0 / max(h, w))
     small = cv2.resize(thresh, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST) if scale < 1.0 else thresh
@@ -73,7 +111,7 @@ def _deskew(gray: np.ndarray) -> np.ndarray:
         return gray
     angle = _estimate_skew_angle(thresh)
     if abs(angle) < 0.3:
-        return gray  # not worth rotating; avoids needless interpolation blur
+        return gray
     (h, w) = gray.shape[:2]
     center = (w // 2, h // 2)
     rot_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -91,8 +129,6 @@ def _normalize_resolution(gray: np.ndarray) -> np.ndarray:
 
 
 def _crop_border(gray: np.ndarray, margin_frac: float = 0.005) -> np.ndarray:
-    """Crop a thin border margin to eliminate page-edge artifacts (scanner
-    shadows, camera vignetting) that confuse Tesseract layout analysis."""
     h, w = gray.shape[:2]
     m_h = max(1, int(h * margin_frac))
     m_w = max(1, int(w * margin_frac))
@@ -100,46 +136,26 @@ def _crop_border(gray: np.ndarray, margin_frac: float = 0.005) -> np.ndarray:
 
 
 def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
-    """Erases ruled table borders before OCR.
-
-    Tesseract's layout analysis routinely drops entire rows of a
-    grid-bordered table (border pixels get classified as part of the text
-    region and confuse connected-component analysis) -- verified empirically
-    against a ruled invoice table where 2 of 3 item rows were silently lost
-    without this step.
-
-    Kernel lengths are sized relative to the image so long ruling lines are
-    erased while normal glyph strokes (even bold headings) are left alone.
-    Kernel sizes are larger than the original to reliably catch thick borders
-    typical of Indian invoice forms printed/scanned at 300 dpi.
-    """
+    """Erases long ruled table borders before OCR without destroying character strokes or decimal points."""
     h, w = gray.shape[:2]
 
-    # Try Otsu first; fall back to adaptive threshold for unevenly lit images
-    # (phone-camera captures often have non-uniform backgrounds that confuse
-    # global Otsu, producing very few foreground pixels and missing borders).
-    _, bw_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-    if cv2.countNonZero(bw_otsu) < (h * w * 0.01):
-        # Fewer than 1% foreground pixels — Otsu probably failed; use adaptive
-        bw = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 10
-        )
-    else:
-        bw = bw_otsu
+    bw = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
+    )
 
-    # Larger kernels (was w//30, h//40) to catch thick double-rule borders
-    h_len = max(40, w // 20)
-    v_len = max(40, h // 30)
+    h_len = max(50, w // 15)
+    v_len = max(50, h // 25)
     horiz = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1)))
     vert = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
-    lines = cv2.dilate(cv2.bitwise_or(horiz, vert), cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    lines = cv2.dilate(cv2.bitwise_or(horiz, vert), cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
 
-    cleaned_bw = cv2.subtract(bw, lines)
-    return cv2.bitwise_not(cleaned_bw)
+    cleaned_gray = gray.copy()
+    cleaned_gray[lines > 0] = 255
+    return cleaned_gray
 
 
 def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
-    """Isolate the main white paper document if photographed on a dark desk/surface."""
+    """Isolate the document if captured on an obvious background surface."""
     h, w = image_bgr.shape[:2]
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (9, 9), 0)
@@ -153,16 +169,16 @@ def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
     best_rect = None
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 0.25 * img_area < area < 0.98 * img_area:
+        if 0.40 * img_area < area < 0.98 * img_area:
             x, y, cw, ch = cv2.boundingRect(cnt)
-            if cw > 0.3 * w and ch > 0.3 * h:
+            if cw > 0.4 * w and ch > 0.4 * h:
                 best_rect = (x, y, cw, ch)
                 break
 
     if best_rect:
         x, y, cw, ch = best_rect
-        pad_x = int(0.01 * cw)
-        pad_y = int(0.01 * ch)
+        pad_x = int(0.02 * cw)
+        pad_y = int(0.02 * ch)
         x0 = max(0, x - pad_x)
         y0 = max(0, y - pad_y)
         x1 = min(w, x + cw + pad_x)
@@ -176,16 +192,14 @@ def _normalize_illumination(gray: np.ndarray) -> np.ndarray:
     """Normalize non-uniform lighting / shadows from mobile camera captures."""
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
     background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-    # Avoid zero division
     background = np.maximum(background, 1)
     normalized = np.uint8(np.clip((gray.astype(np.float32) / background.astype(np.float32)) * 255.0, 0, 255))
     return normalized
 
 
 def preprocess_page(image_bgr: np.ndarray) -> np.ndarray:
-    """Rotation correction, deskew, resolution normalization, contrast
-    enhancement, noise reduction, border crop, and grid-line removal (FR-02).
-    Returns a binarized image ready for OCR.
+    """Preprocess document for OCR: illumination normalization, deskew,
+    resolution normalization, contrast enhancement, and grid-line attenuation.
     """
     cropped_bgr = _crop_document_area(image_bgr)
     gray = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2GRAY)
@@ -197,8 +211,6 @@ def preprocess_page(image_bgr: np.ndarray) -> np.ndarray:
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-
-    gray = cv2.medianBlur(gray, 3)
     return gray
 
 

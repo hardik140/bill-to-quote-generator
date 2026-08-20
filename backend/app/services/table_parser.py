@@ -29,15 +29,13 @@ NUMERIC_COLS = {COL_GST, COL_QTY, COL_RATE, COL_RATE_INCL, COL_AMOUNT}
 
 STOP_LINE_RE = re.compile(
     r"(grand\s*total|sub\s*total|^\s*total\b|total\s*amount|amount\s*in\s*words|"
-    r"terms\s*(&|and)\s*conditions|declaration|authoris|bank\s*details|"
+    r"terms\s*(&|and)\s*conditions|declaration|authoris|signature|bank\s*details|"
     r"\bc\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|\bs\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|\bi\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|"
     r"rounding\s*off|round\s*off|amount\s*chargeable|taxable\s*value|taxable\s*amount|"
-    r"company.*pan|subject\s*to)",
+    r"company.*pan|subject\s*to|e\s*&\s*o\s*e|thank\s*you)",
     re.IGNORECASE,
 )
 
-# Lowered from 3: many real Indian bills have garbled header rows where only
-# 2 column labels survive OCR cleanly (e.g. "Particulars" + "Amount").
 MIN_HEADER_MATCHES = 2
 
 
@@ -46,46 +44,45 @@ def _normalize_phrase(text: str) -> str:
 
 
 def classify_header_cell(text: str) -> str | None:
-    """Map a cell's text to a column type.
-
-    Uses both exact-normalized matching and substring fuzzy matching so that
-    partially-garbled OCR output like "Desc", "Amt", "Qnty", "HSn",
-    "Particulrs" still maps to the correct column type.
-    """
+    """Map a cell's text to a column type with robust alias matching."""
     norm = _normalize_phrase(text)
     if not norm:
         return None
 
     # --- HSN / SAC ---
-    if "hsn" in norm or "sac" in norm:
+    if "hsn" in norm or "sac" in norm or norm in ("code", "commodity"):
         return COL_HSN
 
     # --- Serial number ---
-    if norm in ("no", "sr", "srno", "sl", "slno", "sno", "#") or "serial" in norm or norm == "sno":
+    if norm in ("no", "sr", "srno", "sl", "slno", "sno", "itemno", "slno", "#") or "serial" in norm:
         return COL_SERIAL
 
-    # --- Description (fuzzy substrings) ---
+    # --- Description ---
     if (
         "desc" in norm
         or "particular" in norm
         or "item" in norm
         or "goods" in norm
         or "product" in norm
+        or "service" in norm
+        or "article" in norm
+        or "material" in norm
         or "name" in norm
+        or "details" in norm
         or norm in ("particulrs", "particlr", "itm", "dsc")
     ):
         return COL_DESCRIPTION
 
     # --- Quantity ---
-    if "qty" in norm or "quantity" in norm or "qnty" in norm or "qnt" in norm or norm in ("qty", "qy", "qnt"):
+    if "qty" in norm or "quantity" in norm or "qnty" in norm or "qnt" in norm or norm in ("qty", "qy", "qnt", "units", "nos", "pcs"):
         return COL_QTY
 
     # --- Unit ---
-    if "uom" in norm or norm in ("per", "unit", "uom", "un"):
+    if "uom" in norm or norm in ("per", "unit", "uom", "un", "measure"):
         return COL_UNIT
 
     # --- Rate / price / MRP ---
-    if "rate" in norm or "price" in norm or "mrp" in norm or norm in ("rat", "prc", "pr"):
+    if "rate" in norm or "price" in norm or "mrp" in norm or "prc" in norm or norm in ("rat", "prc", "pr", "cost"):
         if "gst" in norm or "taxrate" in norm or norm in ("rate%", "taxper", "tax%"):
             return COL_GST
         return COL_RATE_INCL if ("incl" in norm or "tax" in norm) else COL_RATE
@@ -97,16 +94,17 @@ def classify_header_cell(text: str) -> str | None:
         or "sgst" in norm
         or "igst" in norm
         or "taxrate" in norm
-        or norm in ("gst%", "taxper")
+        or "vat" in norm
+        or norm in ("gst%", "taxper", "tax%")
     ):
         return COL_GST
 
-    # --- Taxable amount (must check before generic amount/rate) ---
+    # --- Taxable amount ---
     if "taxable" in norm and ("value" in norm or "amount" in norm or "amt" in norm):
         return COL_AMOUNT
 
     # --- Amount / total ---
-    if "amount" in norm or "total" in norm or "value" in norm or "amt" in norm or norm in ("amnt", "amou", "val"):
+    if "amount" in norm or "total" in norm or "value" in norm or "amt" in norm or norm in ("amnt", "amou", "val", "netamt", "gross"):
         return COL_AMOUNT
 
     return None
@@ -120,16 +118,12 @@ class TableHeader:
 
 def find_header(lines: list[OcrLine]) -> TableHeader | None:
     """Locate the table header row by scoring each line for recognised column
-    keywords. Returns the best-scoring line that meets the minimum threshold.
-
-    Handles multi-line wrapped headers (e.g. Rate on line 1 with '(Incl. of Tax)'
-    on line 2) and disambiguates dual rate columns (Rate Incl vs Rate Excl).
+    keywords.
     """
     best: TableHeader | None = None
     best_score = 0
 
     for idx, line in enumerate(lines):
-        # Inspect whether the next line is a subheader (e.g. 'No', '(Incl. of Tax)', 'Rate')
         sub_cells: list[OcrCell] = []
         is_multiline_header = False
         if idx + 1 < len(lines) and not _is_data_line(lines[idx + 1]):
@@ -144,7 +138,6 @@ def find_header(lines: list[OcrLine]) -> TableHeader | None:
 
         for cell in raw_cells:
             text = cell.text
-            # Merge with vertically aligned sub-cell if present
             if sub_cells:
                 matched_sub = [
                     sc for sc in sub_cells
@@ -156,10 +149,8 @@ def find_header(lines: list[OcrLine]) -> TableHeader | None:
             col_type = classify_header_cell(text)
             cell_info.append((cell.center_x, text, col_type))
 
-        # Check for dual rate columns (e.g. Rate Incl and Rate Excl)
         rate_entries = [entry for entry in cell_info if entry[2] in (COL_RATE, COL_RATE_INCL)]
         if len(rate_entries) >= 2:
-            # Sort left to right
             rate_entries.sort(key=lambda e: e[0])
             first_x, first_text, _ = rate_entries[0]
             second_x, second_text, _ = rate_entries[1]
@@ -167,8 +158,6 @@ def find_header(lines: list[OcrLine]) -> TableHeader | None:
             second_is_incl = "incl" in second_text.lower()
             first_is_incl = "incl" in first_text.lower() or "tax" in first_text.lower()
             if not second_is_incl and not first_is_incl:
-                # In standard Indian GST layouts, the first rate column (after Qty)
-                # is Rate (Incl. of Tax), and the second is Rate (Excl. of Tax).
                 first_is_incl = True
 
             new_cell_info = []
@@ -197,13 +186,10 @@ def find_header(lines: list[OcrLine]) -> TableHeader | None:
     if best is not None:
         return best
 
-    # --- Heuristic fallback ---
     return _find_header_heuristic(lines)
 
 
 def _is_data_line(line: OcrLine) -> bool:
-    """Return True if the line looks like a table data row (contains at least
-    one decimal number among its cells)."""
     cells = line.cells()
     if not cells:
         return False
@@ -212,28 +198,15 @@ def _is_data_line(line: OcrLine) -> bool:
 
 
 def _find_header_heuristic(lines: list[OcrLine]) -> TableHeader | None:
-    """Fallback: find the first line after which >= 3 consecutive data lines
-    appear, and treat that line as the header. Assign synthetic column positions
-    based on the x-positions of cells in the first data row below it.
-
-    Column type assignment uses the count of cells in the data row and maps
-    them to the most common Indian invoice column patterns:
-      4 cols: description | qty+unit | rate | amount
-      5 cols: description | hsn | qty+unit | rate | amount
-      6 cols: serial+desc | hsn | gst | qty | rate | amount
-      7 cols: serial+desc | hsn | gst | qty | rate_excl | rate_incl | amount
-    """
-    for idx in range(len(lines) - 3):
+    for idx in range(len(lines) - 2):
         run = sum(1 for l in lines[idx + 1: idx + 4] if _is_data_line(l))
-        if run >= 3:
-            # Use first data row to infer column x-positions
+        if run >= 2:
             data_line = lines[idx + 1]
             cells = data_line.cells()
             if not cells:
                 continue
             n = len(cells)
 
-            # Choose column type mapping based on cell count
             if n <= 3:
                 col_types = [COL_DESCRIPTION, COL_QTY, COL_AMOUNT]
             elif n == 4:
@@ -243,23 +216,18 @@ def _find_header_heuristic(lines: list[OcrLine]) -> TableHeader | None:
             elif n == 6:
                 col_types = [COL_DESCRIPTION, COL_HSN, COL_GST, COL_QTY, COL_RATE, COL_AMOUNT]
             else:
-                # 7+ cols
                 col_types = [COL_DESCRIPTION, COL_HSN, COL_GST, COL_QTY, COL_RATE, COL_RATE_INCL, COL_AMOUNT]
-                if n > 7:
-                    col_types = col_types[:n]  # truncate extra
 
             columns: dict[str, float] = {}
             for i, cell in enumerate(cells[:len(col_types)]):
                 columns[col_types[i]] = cell.center_x
 
-            # Only accept if we have at least description + a numeric column
             has_core = COL_DESCRIPTION in columns and any(
                 c in columns for c in (COL_QTY, COL_RATE, COL_AMOUNT)
             )
             if has_core:
                 return TableHeader(line_index=idx, columns=columns)
     return None
-
 
 
 def _assign_cells_to_columns(cells: list[OcrCell], columns: dict[str, float]) -> dict[str, list[OcrCell]]:
@@ -281,7 +249,7 @@ class CandidateItem:
     source_rate: Decimal | None
     taxable_rate: Decimal | None
     extracted_amount: Decimal | None
-    confidence: float  # 0-1
+    confidence: float
     ambiguous: bool = field(default=False)
 
 
@@ -292,10 +260,61 @@ def _row_confidence(cells: list[OcrCell]) -> float:
     return max(0.0, min(1.0, (sum(confs) / len(confs)) / 100.0))
 
 
+def _parse_headerless_fallback(lines: list[OcrLine]) -> list[CandidateItem]:
+    """Fallback row scanner for receipts or bills without standard column headers."""
+    items: list[CandidateItem] = []
+    auto_serial = 0
+
+    for line in lines:
+        if STOP_LINE_RE.search(line.text):
+            break
+        cells = line.cells()
+        if not cells:
+            continue
+
+        decimals: list[tuple[int, Decimal]] = []
+        for idx, c in enumerate(cells):
+            val = parse_decimal_loose(c.text)
+            if val is not None and val > 0:
+                decimals.append((idx, val))
+
+        if not decimals:
+            if items and len(cells) == 1 and not re.search(r"^\d+$", cells[0].text):
+                items[-1].description += f" {cells[0].text}"
+            continue
+
+        desc_cells = [cells[i] for i in range(len(cells)) if i not in [d[0] for d in decimals]]
+        desc_text = " ".join(c.text for c in desc_cells).strip()
+
+        rate_val = decimals[-1][1]
+        qty_val = decimals[0][1] if len(decimals) >= 2 else Decimal("1")
+        if len(decimals) >= 3:
+            rate_val = decimals[-2][1]
+
+        auto_serial += 1
+        items.append(
+            CandidateItem(
+                serial_no=auto_serial,
+                description=desc_text or f"Item {auto_serial}",
+                hsn_sac=None,
+                gst_rate=Decimal("0"),
+                quantity=qty_val,
+                unit=None,
+                source_rate=rate_val,
+                taxable_rate=rate_val,
+                extracted_amount=decimals[-1][1],
+                confidence=0.70,
+                ambiguous=False,
+            )
+        )
+
+    return items
+
+
 def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
     header = find_header(lines)
     if header is None:
-        return []
+        return _parse_headerless_fallback(lines)
 
     items: list[CandidateItem] = []
     auto_serial = 0
@@ -307,25 +326,32 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
             continue
 
         assigned = _assign_cells_to_columns(cells, header.columns)
-        description = " ".join(c.text for c in assigned.get(COL_DESCRIPTION, []))
+        description = " ".join(c.text for c in assigned.get(COL_DESCRIPTION, [])).strip()
         numeric_present = any(col in assigned for col in NUMERIC_COLS)
+
         if not description and not numeric_present:
-            continue  # blank / noise line
+            continue
 
         def joined(col: str) -> str | None:
             parts = assigned.get(col)
             return " ".join(c.text for c in parts) if parts else None
+
+        rate_excl = parse_decimal_loose(joined(COL_RATE))
+        rate_incl = parse_decimal_loose(joined(COL_RATE_INCL))
+        amount = parse_decimal_loose(joined(COL_AMOUNT))
+        quantity = parse_decimal_loose(joined(COL_QTY))
+
+        # Check if this is a multiline description continuation of the previous row
+        if not numeric_present and description and items and rate_excl is None and amount is None:
+            items[-1].description += f" {description}"
+            continue
 
         serial_raw = parse_int_loose(joined(COL_SERIAL))
         auto_serial += 1
         serial_no = serial_raw if serial_raw is not None else auto_serial
 
         gst_rate = parse_decimal_loose(joined(COL_GST))
-        quantity = parse_decimal_loose(joined(COL_QTY))
         unit = normalize_unit(joined(COL_UNIT))
-        rate_excl = parse_decimal_loose(joined(COL_RATE))
-        rate_incl = parse_decimal_loose(joined(COL_RATE_INCL))
-        amount = parse_decimal_loose(joined(COL_AMOUNT))
 
         ambiguous = False
         if rate_excl is not None and rate_incl is not None:
@@ -333,8 +359,6 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
         elif rate_excl is not None:
             source_rate = taxable_rate = rate_excl
         elif rate_incl is not None:
-            # Only a tax-inclusive rate was printed. Per TRD §6, do not
-            # guess the exclusive basis — surface both and flag for review.
             source_rate = rate_incl
             if gst_rate is not None and gst_rate >= 0:
                 taxable_rate = rate_incl / (1 + gst_rate / Decimal("100"))
@@ -344,6 +368,8 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
         elif quantity and amount and quantity != 0:
             source_rate = taxable_rate = (amount / quantity)
             ambiguous = True
+        elif amount is not None:
+            source_rate = taxable_rate = amount
         else:
             source_rate = taxable_rate = None
 
@@ -372,4 +398,8 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
                 ambiguous=ambiguous,
             )
         )
+
+    if not items:
+        return _parse_headerless_fallback(lines)
+
     return items

@@ -80,29 +80,48 @@ def extract_document(db: Session, document: Document) -> Bill:
     try:
         source_path = settings.uploads_dir / document.stored_filename
         image_out_dir = settings.images_dir / document.id
-        page_paths = preprocessing_service.document_to_preprocessed_images(
-            source_path, image_out_dir, document.mime_type
-        )
-        if not page_paths:
-            raise ExtractionError("No pages could be rendered from the document.")
 
         all_candidate_items: list[CandidateItem] = []
         document_total: Decimal | None = None
         serial_offset = 0
 
-        for page_path in page_paths:
-            words = run_ocr(page_path)
-            words = filter_noise_words(words)  # strip border artefacts before parsing
-            lines = group_lines(words)
+        # 1. Fast-path: try native vector PDF text extraction if digital PDF
+        if document.mime_type == "application/pdf":
+            digital_pages_words = preprocessing_service.extract_digital_pdf_words(source_path)
+            if digital_pages_words:
+                for page_words in digital_pages_words:
+                    words = filter_noise_words(page_words)
+                    lines = group_lines(words)
+                    if document_total is None:
+                        document_total = extract_document_total(lines)
+                    page_items = parse_table(lines)
+                    for item in page_items:
+                        item.serial_no += serial_offset
+                    all_candidate_items.extend(page_items)
+                    serial_offset += len(page_items)
 
-            if document_total is None:
-                document_total = extract_document_total(lines)
+        # 2. Fallback / Scanned / Image path: raster preprocessing + OCR
+        if not all_candidate_items:
+            page_paths = preprocessing_service.document_to_preprocessed_images(
+                source_path, image_out_dir, document.mime_type
+            )
+            if not page_paths:
+                raise ExtractionError("No pages could be rendered from the document.")
 
-            page_items = parse_table(lines)
-            for item in page_items:
-                item.serial_no += serial_offset
-            all_candidate_items.extend(page_items)
-            serial_offset += len(page_items)
+            serial_offset = 0
+            for page_path in page_paths:
+                words = run_ocr(page_path)
+                words = filter_noise_words(words)
+                lines = group_lines(words)
+
+                if document_total is None:
+                    document_total = extract_document_total(lines)
+
+                page_items = parse_table(lines)
+                for item in page_items:
+                    item.serial_no += serial_offset
+                all_candidate_items.extend(page_items)
+                serial_offset += len(page_items)
 
         bill = bill_repository.create(db, document_id=document.id, currency=settings.default_currency)
 

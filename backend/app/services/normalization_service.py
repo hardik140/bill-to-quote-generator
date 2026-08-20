@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from app.services.ocr_postprocess import fix_numeric_ocr
 
 NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
-CURRENCY_STRIP_RE = re.compile(r"(?:rs\.?|inr|₹)", re.IGNORECASE)
+CURRENCY_STRIP_RE = re.compile(r"(?:rs\.?|inr|₹|\$|usd|eur|€|\/-|/-|\*)", re.IGNORECASE)
 
 UNIT_SYNONYMS: dict[str, str] = {
     "PC": "PCS", "PCS": "PCS", "PIECE": "PCS", "PIECES": "PCS",
@@ -33,12 +33,12 @@ def parse_decimal_loose(raw: str | None) -> Decimal | None:
     than guessing when nothing number-like is found."""
     if not raw:
         return None
-    cleaned = CURRENCY_STRIP_RE.sub("", raw)
+    cleaned = CURRENCY_STRIP_RE.sub("", raw).strip()
+    cleaned = re.sub(r"(\d+)\s*\.\s*(\d{1,2})\b", r"\1.\2", cleaned)
     match = NUMBER_RE.search(cleaned)
     if not match:
-        # Fall back to OCR confusion fixes (O↔0, I↔1, ...) only when the
-        # token has no digits at all -- clean input is never rewritten.
-        match = NUMBER_RE.search(fix_numeric_ocr(cleaned))
+        cleaned_fix = fix_numeric_ocr(cleaned)
+        match = NUMBER_RE.search(cleaned_fix)
     if not match:
         return None
     token = match.group(0).replace(",", "")

@@ -46,40 +46,59 @@ def run_ocr(image_path: Path, lang: str | None = None, config: str | None = None
     """Run Tesseract OCR on *image_path* and return a flat list of OcrWord
     objects, one per recognised token.
 
-    ``config`` overrides the default Tesseract config string from settings.
-    Use ``--psm 4`` (single column of text blocks) for structured invoice
-    layouts — empirically shown to dramatically improve confidence scores
-    over the default auto-PSM on bordered Indian invoices.
+    If the primary pass (PSM 4) yields low confidence or very few words,
+    runs a secondary fallback pass (PSM 6) to capture un-bordered
+    or non-standard receipt layouts.
     """
-    data = pytesseract.image_to_data(
-        str(image_path),
-        lang=lang or settings.ocr_language,
-        config=config if config is not None else settings.tesseract_config,
-        output_type=Output.DICT,
-    )
-    words: list[OcrWord] = []
-    n = len(data["text"])
-    for i in range(n):
-        text = data["text"][i].strip()
-        if not text:
-            continue
-        try:
-            conf = float(data["conf"][i])
-        except (ValueError, TypeError):
-            conf = -1.0
-        words.append(
-            OcrWord(
-                text=text,
-                confidence=conf,
-                left=int(data["left"][i]),
-                top=int(data["top"][i]),
-                width=int(data["width"][i]),
-                height=int(data["height"][i]),
-                line_num=int(data["line_num"][i]),
-                block_num=int(data["block_num"][i]),
-                par_num=int(data["par_num"][i]),
-            )
+    def _do_ocr(cfg: str) -> list[OcrWord]:
+        data = pytesseract.image_to_data(
+            str(image_path),
+            lang=lang or settings.ocr_language,
+            config=cfg,
+            output_type=Output.DICT,
         )
+        words: list[OcrWord] = []
+        n = len(data["text"])
+        for i in range(n):
+            text = data["text"][i].strip()
+            if not text:
+                continue
+            try:
+                conf = float(data["conf"][i])
+            except (ValueError, TypeError):
+                conf = -1.0
+            words.append(
+                OcrWord(
+                    text=text,
+                    confidence=conf,
+                    left=int(data["left"][i]),
+                    top=int(data["top"][i]),
+                    width=int(data["width"][i]),
+                    height=int(data["height"][i]),
+                    line_num=int(data["line_num"][i]),
+                    block_num=int(data["block_num"][i]),
+                    par_num=int(data["par_num"][i]),
+                )
+            )
+        return words
+
+    primary_cfg = config if config is not None else settings.tesseract_config
+    words = _do_ocr(primary_cfg)
+
+    valid_confs = [w.confidence for w in words if w.confidence >= 0]
+    avg_conf = sum(valid_confs) / len(valid_confs) if valid_confs else 0.0
+
+    if len(words) < 5 or avg_conf < 45.0:
+        fallback_cfg = "--psm 6 --dpi 300 -c preserve_interword_spaces=1"
+        try:
+            fallback_words = _do_ocr(fallback_cfg)
+            fallback_confs = [w.confidence for w in fallback_words if w.confidence >= 0]
+            fallback_avg = sum(fallback_confs) / len(fallback_confs) if fallback_confs else 0.0
+            if len(fallback_words) > len(words) or fallback_avg > avg_conf:
+                return fallback_words
+        except Exception:
+            pass
+
     return words
 
 
