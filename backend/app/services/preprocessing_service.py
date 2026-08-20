@@ -88,17 +88,17 @@ def _projection_variance(binary: np.ndarray, angle: float) -> float:
     return float(row_sums.var())
 
 
-def _estimate_skew_angle(thresh: np.ndarray, search_range: float = 15.0) -> float:
+def _estimate_skew_angle(thresh: np.ndarray, search_range: float = 14.0) -> float:
     h, w = thresh.shape[:2]
-    scale = min(1.0, 800.0 / max(h, w))
-    small = cv2.resize(thresh, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST) if scale < 1.0 else thresh
+    scale = min(1.0, 400.0 / max(h, w))
+    small = cv2.resize(thresh, (max(10, int(w * scale)), max(10, int(h * scale))), interpolation=cv2.INTER_NEAREST) if scale < 1.0 else thresh
 
     best_angle, best_score = 0.0, -1.0
-    for angle in np.arange(-search_range, search_range + 1.0, 1.0):
+    for angle in np.arange(-search_range, search_range + 1.0, 2.0):
         score = _projection_variance(small, angle)
         if score > best_score:
             best_score, best_angle = score, angle
-    for angle in np.arange(best_angle - 1.0, best_angle + 1.01, 0.1):
+    for angle in np.arange(best_angle - 1.5, best_angle + 1.6, 0.5):
         score = _projection_variance(small, angle)
         if score > best_score:
             best_score, best_angle = score, angle
@@ -143,8 +143,8 @@ def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 10
     )
 
-    h_len = max(50, w // 15)
-    v_len = max(50, h // 25)
+    h_len = max(40, w // 20)
+    v_len = max(40, h // 30)
     horiz = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (h_len, 1)))
     vert = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
     lines = cv2.dilate(cv2.bitwise_or(horiz, vert), cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
@@ -169,9 +169,9 @@ def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
     best_rect = None
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 0.40 * img_area < area < 0.98 * img_area:
+        if 0.50 * img_area < area < 0.98 * img_area:
             x, y, cw, ch = cv2.boundingRect(cnt)
-            if cw > 0.4 * w and ch > 0.4 * h:
+            if cw > 0.5 * w and ch > 0.5 * h:
                 best_rect = (x, y, cw, ch)
                 break
 
@@ -189,11 +189,15 @@ def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
 
 
 def _normalize_illumination(gray: np.ndarray) -> np.ndarray:
-    """Normalize non-uniform lighting / shadows from mobile camera captures."""
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
-    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-    background = np.maximum(background, 1)
-    normalized = np.uint8(np.clip((gray.astype(np.float32) / background.astype(np.float32)) * 255.0, 0, 255))
+    """Fast illumination normalization via downscaled morphology."""
+    h, w = gray.shape[:2]
+    small_w, small_h = max(10, w // 4), max(10, h // 4)
+    small = cv2.resize(gray, (small_w, small_h))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    background = cv2.morphologyEx(small, cv2.MORPH_CLOSE, kernel)
+    background_full = cv2.resize(background, (w, h))
+    background_full = np.maximum(background_full, 1)
+    normalized = np.uint8(np.clip((gray.astype(np.float32) / background_full.astype(np.float32)) * 255.0, 0, 255))
     return normalized
 
 

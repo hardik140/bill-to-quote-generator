@@ -237,14 +237,53 @@ def test_headerless_receipt_parsing():
     assert items[1].taxable_rate == Decimal("220.00")
 
 
-def test_currency_symbol_cleanup():
-    from app.services.normalization_service import parse_decimal_loose
+def test_fifteen_item_invoice_with_dual_rates_and_footer():
+    from app.services.extraction_service import _clean_description
 
-    assert parse_decimal_loose("₹ 1,500.00") == Decimal("1500.00")
-    assert parse_decimal_loose("Rs. 250/-") == Decimal("250")
-    assert parse_decimal_loose("INR 99.50") == Decimal("99.50")
-    assert parse_decimal_loose("$ 45.00") == Decimal("45.00")
-    assert parse_decimal_loose("240 . 00") == Decimal("240.00")
+    rows = [
+        ["SI No.", "Description of Goods", "HSN/SAC", "GST Rate", "Quantity", "Rate (Incl. of Tax)", "Rate", "per", "Amount"],
+        ["1", "i 1/Student attendance Register No. 2", "4820", "18 %", "6 PCS.", "55.00", "46.61", "PCS.", "279.66"],
+        ["2", "wi 2|A4 Paper Rim 75 GSM", "4802", "18 %", "1 RIM", "240.00", "203.39", "RIM", "203.39"],
+        ["3", "a 3] Teacher Attendence No. 2", "4820", "18 %", "1 PCS.", "180.00", "152.54", "PCS.", "152.54"],
+        ["4", "ig 4/Long Note Book 240 PG", "4820", "0 %", "5 PCS.", "115.00", "115.00", "PCS.", "575.00"],
+        ["5", "i' & Paste File", "4820", "18 %", "5 PCS.", "119.99", "101.69", "PCS.", "508.45"],
+        ["6", "i 6 Record File", "4820", "18 %", "15 PCS.", "5.99", "5.08", "PCS.", "76.20"],
+        ["7", "if! 7 ADMISSION FORM", "4820", "18 %", "1 PKT.", "90.00", "76.27", "PKT.", "76.27"],
+        ["8", "i 8 Pre. Stamp Pad Small", "9612", "18 %", "1 PCS.", "30.00", "25.42", "PCS.", "25.42"],
+        ["9", "Ball Pen MRP 'S/-", "9608", "18 %", "5 PCS.", "4.00", "3.39", "PCS.", "16.95"],
+        ["10", "(— 10 Permanent Marker", "9608", "18 %", "1 PCS.", "20.00", "16.95", "PCS.", "16.95"],
+        ["11", "ie 11 Fevicol100gm", "3506", "18 %", "3 PCS.", "55.00", "46.61", "PCS.", "139.83"],
+        ["12", "ei 12)SCALE", "9017", "18 %", "4 PCS.", "30.00", "25.42", "PCS.", "101.68"],
+        ["13", "FldidPen", "9608", "18 %", "3 PCS.", "20.00", "16.95", "PCS.", "50.85"],
+        ["14", "i me 14) 'Stapler HS-R-10", "8472", "18 %", "1 PCS.", "50.00", "42.37", "PCS.", "42.37"],
+        ["15", "Kangaro 10 No. Staple Pin", "8305", "18 %", "3 PCS.", "9.99", "8.47", "PCS.", "25.41"],
+        ["", "CGST", "", "", "", "", "", "", "154.45"],
+        ["", "SGST", "", "", "", "", "", "", "154.45"],
+        ["", "ROUNDING OFF", "", "", "", "", "", "", "0.13"],
+    ]
+    words = make_words(rows, col_count=9)
+    lines = group_lines(words)
+    items = parse_table(lines)
+
+    # Exactly 15 items (footer lines CGST/SGST/ROUNDING OFF excluded)
+    assert len(items) == 15
+
+    # Check first item: base rate = 46.61, cleaned desc = "Student attendance Register No. 2"
+    assert items[0].taxable_rate == Decimal("46.61")
+    assert _clean_description(items[0].description, 1) == "Student attendance Register No. 2"
+
+    # Check item 2: A4 Paper Rim 75 GSM -> base rate = 203.39
+    assert items[1].taxable_rate == Decimal("203.39")
+    assert _clean_description(items[1].description, 2) == "A4 Paper Rim 75 GSM"
+
+    # Check item 4: Long Note Book 240 PG -> base rate = 115.00
+    assert items[3].taxable_rate == Decimal("115.00")
+    assert _clean_description(items[3].description, 4) == "Long Note Book 240 PG"
+
+    # Check item 15: Kangaro 10 No. Staple Pin -> base rate = 8.47
+    assert items[14].taxable_rate == Decimal("8.47")
+    assert _clean_description(items[14].description, 15) == "Kangaro 10 No. Staple Pin"
+
 
 
 

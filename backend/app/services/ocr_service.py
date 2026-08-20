@@ -85,16 +85,11 @@ def run_ocr(image_path: Path, lang: str | None = None, config: str | None = None
     primary_cfg = config if config is not None else settings.tesseract_config
     words = _do_ocr(primary_cfg)
 
-    valid_confs = [w.confidence for w in words if w.confidence >= 0]
-    avg_conf = sum(valid_confs) / len(valid_confs) if valid_confs else 0.0
-
-    if len(words) < 5 or avg_conf < 45.0:
+    if len(words) < 3:
         fallback_cfg = "--psm 6 --dpi 300 -c preserve_interword_spaces=1"
         try:
             fallback_words = _do_ocr(fallback_cfg)
-            fallback_confs = [w.confidence for w in fallback_words if w.confidence >= 0]
-            fallback_avg = sum(fallback_confs) / len(fallback_confs) if fallback_confs else 0.0
-            if len(fallback_words) > len(words) or fallback_avg > avg_conf:
+            if len(fallback_words) > len(words):
                 return fallback_words
         except Exception:
             pass

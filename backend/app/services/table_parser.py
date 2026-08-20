@@ -30,8 +30,8 @@ NUMERIC_COLS = {COL_GST, COL_QTY, COL_RATE, COL_RATE_INCL, COL_AMOUNT}
 STOP_LINE_RE = re.compile(
     r"(grand\s*total|sub\s*total|^\s*total\b|total\s*amount|amount\s*in\s*words|"
     r"terms\s*(&|and)\s*conditions|declaration|authoris|signature|bank\s*details|"
-    r"\bc\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|\bs\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|\bi\s*\.?\s*g\s*\.?\s*s\s*\.?\s*t\b|"
-    r"rounding\s*off|round\s*off|amount\s*chargeable|taxable\s*value|taxable\s*amount|"
+    r"\bc\s*[\.\s]*g\s*[\.\s]*s\s*[\.\s]*t\b|\bs\s*[\.\s]*g\s*[\.\s]*s\s*[\.\s]*t\b|\bi\s*[\.\s]*g\s*[\.\s]*s\s*[\.\s]*t\b|"
+    r"\bcgst\b|\bsgst\b|\bigst\b|\bround\b|rounding|amount\s*chargeable|taxable\s*value|taxable\s*amount|"
     r"company.*pan|subject\s*to|e\s*&\s*o\s*e|thank\s*you)",
     re.IGNORECASE,
 )
@@ -49,12 +49,16 @@ def classify_header_cell(text: str) -> str | None:
     if not norm:
         return None
 
+    # --- GST / tax rate (Check FIRST so 'GST Rate' is never classified as Rate) ---
+    if "gst" in norm or "cgst" in norm or "sgst" in norm or "igst" in norm or "taxrate" in norm or "taxper" in norm or norm in ("vat", "tax%", "gst%"):
+        return COL_GST
+
     # --- HSN / SAC ---
     if "hsn" in norm or "sac" in norm or norm in ("code", "commodity"):
         return COL_HSN
 
     # --- Serial number ---
-    if norm in ("no", "sr", "srno", "sl", "slno", "sno", "itemno", "slno", "#") or "serial" in norm:
+    if norm in ("no", "sr", "srno", "sl", "slno", "sno", "itemno", "slno", "#", "si", "sino") or "serial" in norm:
         return COL_SERIAL
 
     # --- Description ---
@@ -81,23 +85,13 @@ def classify_header_cell(text: str) -> str | None:
     if "uom" in norm or norm in ("per", "unit", "uom", "un", "measure"):
         return COL_UNIT
 
-    # --- Rate / price / MRP ---
-    if "rate" in norm or "price" in norm or "mrp" in norm or "prc" in norm or norm in ("rat", "prc", "pr", "cost"):
-        if "gst" in norm or "taxrate" in norm or norm in ("rate%", "taxper", "tax%"):
-            return COL_GST
-        return COL_RATE_INCL if ("incl" in norm or "tax" in norm) else COL_RATE
+    # --- Rate (Incl. of Tax) / MRP ---
+    if "incl" in norm or "mrp" in norm or "inclusive" in norm:
+        return COL_RATE_INCL
 
-    # --- GST / tax rate ---
-    if (
-        "gst" in norm
-        or "cgst" in norm
-        or "sgst" in norm
-        or "igst" in norm
-        or "taxrate" in norm
-        or "vat" in norm
-        or norm in ("gst%", "taxper", "tax%")
-    ):
-        return COL_GST
+    # --- Rate / Price (Exclusive / Taxable) ---
+    if "rate" in norm or "price" in norm or "prc" in norm or norm in ("rat", "prc", "pr", "cost", "unitprice"):
+        return COL_RATE
 
     # --- Taxable amount ---
     if "taxable" in norm and ("value" in norm or "amount" in norm or "amt" in norm):
@@ -149,15 +143,16 @@ def find_header(lines: list[OcrLine]) -> TableHeader | None:
             col_type = classify_header_cell(text)
             cell_info.append((cell.center_x, text, col_type))
 
+        # Check for dual rate columns (Rate Incl vs Rate Excl)
         rate_entries = [entry for entry in cell_info if entry[2] in (COL_RATE, COL_RATE_INCL)]
-        if len(rate_entries) >= 2:
+        if len(rate_entries) == 2:
             rate_entries.sort(key=lambda e: e[0])
             first_x, first_text, _ = rate_entries[0]
             second_x, second_text, _ = rate_entries[1]
 
-            second_is_incl = "incl" in second_text.lower()
-            first_is_incl = "incl" in first_text.lower() or "tax" in first_text.lower()
-            if not second_is_incl and not first_is_incl:
+            first_is_incl = "incl" in first_text.lower() or "mrp" in first_text.lower()
+            second_is_incl = "incl" in second_text.lower() or "mrp" in second_text.lower()
+            if not first_is_incl and not second_is_incl:
                 first_is_incl = True
 
             new_cell_info = []
@@ -321,6 +316,10 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
     for line in lines[header.line_index + 1:]:
         if STOP_LINE_RE.search(line.text):
             break
+        norm_line = re.sub(r"[^a-z]", "", line.text.lower())
+        if any(w in norm_line for w in ("cgst", "sgst", "igst", "roundingoff", "roundoff", "grandtotal", "amountinwords", "termsandconditions")):
+            break
+
         cells = line.cells()
         if not cells:
             continue
@@ -330,6 +329,10 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
         numeric_present = any(col in assigned for col in NUMERIC_COLS)
 
         if not description and not numeric_present:
+            continue
+
+        # If description is a single letter or pure noise and no valid rate
+        if len(re.sub(r"[^a-zA-Z0-9]", "", description)) <= 1 and not numeric_present:
             continue
 
         def joined(col: str) -> str | None:

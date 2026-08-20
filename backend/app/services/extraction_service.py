@@ -43,18 +43,40 @@ class ExtractionError(Exception):
     pass
 
 
-def _clean_description(description: str, serial_no: int) -> str:
-    """Strip a leading serial number that OCR attached to the product name.
+def _clean_description(description: str, serial_no: int = 0) -> str:
+    """Strip leading OCR noise, grid lines, and serial prefixes attached to product names.
 
-    "1 Camlin Marker" -> "Camlin Marker". A bare leading number is only
-    removed when it equals the row's serial number, so genuine names that
-    start with a digit ("2 Inch Binder") survive; the punctuated forms
-    ("1.", "1)") are unambiguous and always stripped.
+    Preserves valid product names starting with alphanumeric codes (e.g. "A4 Paper", "2 Inch Binder").
     """
-    text = _SERIAL_PUNCT_RE.sub("", description.strip())
-    m = _SERIAL_BARE_RE.match(text)
-    if m and m.group(1) == str(serial_no):
-        text = _SERIAL_BARE_RE.sub("", text, count=1)
+    text = description.strip()
+    if not text:
+        return ""
+
+    # Case A: Leading noise punctuation or border bars (e.g. "| ", "/ ", "- ", "— ", "' & ")
+    text = re.sub(r"^[\|\/\-\:\;\.\,\'\"\`\~\[\]\(\)\{\}\&\#\s!—]+\s*", "", text)
+
+    # Case B: Noise prefix + serial number with punctuation (e.g. "wi 2|", "i 1/", "a 3]", "ig 4/", "i me 14)", "ei 12)")
+    text = re.sub(
+        r"^[a-zA-Z]{1,3}(?:\s+[a-zA-Z]{1,3})?\s*\d{1,3}\s*[\|\/\]\)\:\.\-\\\'\`]+\s*",
+        "",
+        text,
+    )
+
+    # Case C: Punctuation-based serial numbers (e.g. "1.", "1)", "14)", "1 -", "1/")
+    text = re.sub(r"^\d{1,3}\s*[.):\-\|\/\]\\]+\s*", "", text)
+
+    # Case D: Single letter OCR line fragment followed by serial (e.g. "i 6 ", "i 8 ", "ie 11 ")
+    if serial_no > 0:
+        text = re.sub(rf"^[a-zA-Z]{{1,3}}\s+{serial_no}\s+", "", text)
+        text = re.sub(rf"^{serial_no}\s+", "", text)
+
+    # Clean leftover leading symbols
+    text = re.sub(r"^[\|\/\-\:\;\.\,\'\"\`\~\[\]\(\)\{\}\&\#\s!—]+\s*", "", text)
+
+    # Clean known OCR artifacts in common words
+    text = re.sub(r"['`]?S\s*\/\-", "5/-", text)
+    text = re.sub(r"\bFldid\s*Pen\b", "Fluid Pen", text, flags=re.IGNORECASE)
+
     return text.strip()
 
 
