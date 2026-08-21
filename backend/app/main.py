@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import bills, documents, scenarios
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, apply_column_upgrades, engine
 from app.models import *  # noqa: F401,F403 - ensures all models are registered on Base
 
 app = FastAPI(title="Local Bill-to-Quotation Scenario Generator", version="1.0.0")
@@ -23,6 +23,7 @@ app.add_middleware(
 def on_startup() -> None:
     settings.ensure_storage_dirs()
     Base.metadata.create_all(bind=engine)
+    apply_column_upgrades()
 
 
 app.include_router(documents.router)

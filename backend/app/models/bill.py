@@ -33,6 +33,8 @@ class Bill(Base):
     vendor_name: Mapped[str | None] = mapped_column(String(255))
     vendor_address: Mapped[str | None] = mapped_column(String(500))
     vendor_gstin: Mapped[str | None] = mapped_column(String(20))
+    vendor_phone: Mapped[str | None] = mapped_column(String(30))
+    vendor_email: Mapped[str | None] = mapped_column(String(255))
     invoice_number: Mapped[str | None] = mapped_column(String(100), index=True)
     invoice_date: Mapped[date | None] = mapped_column(Date)
     buyer_name: Mapped[str | None] = mapped_column(String(255))

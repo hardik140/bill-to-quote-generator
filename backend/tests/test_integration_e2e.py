@@ -99,15 +99,66 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
     assert files_resp.status_code == 200
     assert len(files_resp.json()["files"]) == 3
 
-    for (_, label), path in generated_paths.items():
+    for (scenario_type, label), path in generated_paths.items():
         doc = fitz.open(path)
         try:
             text = "\n".join(page.get_text() for page in doc)
-            assert "QUOTATION" in text
-            assert "Total" not in text
+            assert label in text
+            assert "Total" in text
             assert "Rs." in text
+            if scenario_type == "BASELINE":
+                assert BASELINE_LABEL in text
+                # Extracted from the fixture invoice -- proves the letterhead
+                # is real data, not a placeholder.
+                assert "Delhi Stationery House" in text
+            else:
+                assert SIMULATION_DISCLAIMER in text
+                # PRD compliance note / DATA.md §16 rule 10: a simulated
+                # scenario must never carry the source vendor's identity.
+                # (The word "GSTIN" legitimately appears in the compliance
+                # footer itself -- "no ... GSTIN ... should be relied upon
+                # as authentic" -- so check for the actual value, not the word.)
+                assert "Delhi Stationery House" not in text
+                assert "07ABCDE1234F" not in text
         finally:
             doc.close()
+
+
+def test_simulated_scenarios_never_carry_vendor_identity(client: TestClient, sample_invoice_path: Path):
+    """Regression guard for the anti-impersonation rule (PRD compliance
+    note, DATA.md §16 rule 10): whatever vendor identity was extracted
+    from the source document must appear only on the Baseline PDF, never
+    on a SIMULATED scenario PDF."""
+    document_id, bill_id = _upload_and_extract(client, sample_invoice_path)
+
+    bill = client.get(f"/api/bills/{bill_id}").json()
+    for item in bill["items"]:
+        expected_rate = next((v for k, v in EXPECTED_RATES.items() if k in item["description"]), None)
+        client.put(f"/api/bills/{bill_id}/items/{item['id']}", json={"rate": str(expected_rate)})
+
+    assert client.post(f"/api/bills/{bill_id}/confirm").status_code == 200
+
+    # The trimmed BillOut schema doesn't expose vendor fields via the API;
+    # what actually matters is verified through the generated PDF content.
+    scen_resp = client.post(
+        f"/api/bills/{bill_id}/scenarios",
+        json={"scenario_b_markup_percent": "10", "scenario_c_markup_percent": "20", "rounding": "none"},
+    )
+    scenario_ids = scen_resp.json()["scenario_ids"]
+    scenarios = [client.get(f"/api/scenarios/{sid}").json() for sid in scenario_ids]
+
+    for scenario in scenarios:
+        pdf_resp = client.post(f"/api/scenarios/{scenario['id']}/pdf")
+        path = Path(pdf_resp.json()["storage_path"])
+        doc = fitz.open(path)
+        try:
+            text = "\n".join(page.get_text() for page in doc)
+        finally:
+            doc.close()
+        if scenario["scenario_type"] != "BASELINE":
+            assert "Delhi Stationery House" not in text
+            assert "07ABCDE1234F" not in text  # GSTIN fragment must not leak
+            assert "QUOTATION" not in text.upper() or SIMULATION_DISCLAIMER in text
 
 
 def test_cannot_generate_scenarios_before_confirmation(client: TestClient, sample_invoice_path: Path):

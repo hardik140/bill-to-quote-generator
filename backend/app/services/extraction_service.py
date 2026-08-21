@@ -2,10 +2,14 @@
 -> confidence -> persistence. TRD §5-6.
 
 Scope (user decision, 2026-08-19): extract only each product's NAME and
-RATE from the uploaded bill -- nothing else. Vendor/buyer/invoice header
-metadata is not extracted, and quantities/GST are not parsed; items are
-stored with quantity=1 and gst_rate=0 so a bill's total is simply the sum
-of its product rates.
+RATE from the uploaded bill's line-item table -- quantities/GST are not
+parsed; items are stored with quantity=1 and gst_rate=0 so a bill's total
+is simply the sum of its product rates. Document-level vendor identity
+(name/address/GSTIN/phone/email) and invoice reference/date *are* still
+extracted (restored 2026-08-22) because the Baseline PDF's letterhead
+needs them -- see field_parser.py. This is document-level metadata, not a
+line item, so it doesn't reintroduce the per-item complexity that was
+deliberately dropped.
 
 OCR never writes a "final" value directly -- every persisted BillItem is
 created with user_verified=False so FR-05 human review is mandatory before
@@ -24,10 +28,10 @@ from app.models.document import STATUS_FAILED, STATUS_PROCESSED, STATUS_PROCESSI
 from app.repositories import bill_repository, document_repository, processing_run_repository
 from app.services import preprocessing_service
 from app.services.calculation_service import compute_bill_totals, compute_line
-from app.services.field_parser import extract_document_total
+from app.services.field_parser import HeaderFields, extract_document_total, parse_header_fields
 from app.services.line_grouping import group_lines
 from app.services.ocr_postprocess import filter_noise_words
-from app.services.ocr_service import run_ocr
+from app.services.ocr_service import full_text, run_ocr
 from app.services.table_parser import CandidateItem, parse_table
 from app.services.validation_service import check_total_reconciliation
 
@@ -103,17 +107,25 @@ def extract_document(db: Session, document: Document) -> Bill:
         source_path = settings.uploads_dir / document.stored_filename
         image_out_dir = settings.images_dir / document.id
 
+        # Baseline-PDF letterhead visual: a factual crop of the source
+        # document's own header, independent of which extraction path
+        # below actually runs (the digital fast-path never rasterizes).
+        preprocessing_service.generate_header_crop(source_path, image_out_dir, document.mime_type)
+
         all_candidate_items: list[CandidateItem] = []
         document_total: Decimal | None = None
+        header_fields = HeaderFields()
         serial_offset = 0
 
         # 1. Fast-path: try native vector PDF text extraction if digital PDF
         if document.mime_type == "application/pdf":
             digital_pages_words = preprocessing_service.extract_digital_pdf_words(source_path)
             if digital_pages_words:
-                for page_words in digital_pages_words:
+                for page_index, page_words in enumerate(digital_pages_words):
                     words = filter_noise_words(page_words)
                     lines = group_lines(words)
+                    if page_index == 0:
+                        header_fields = parse_header_fields(lines, full_text(words))
                     if document_total is None:
                         document_total = extract_document_total(lines)
                     page_items = parse_table(lines)
@@ -131,10 +143,13 @@ def extract_document(db: Session, document: Document) -> Bill:
                 raise ExtractionError("No pages could be rendered from the document.")
 
             serial_offset = 0
-            for page_path in page_paths:
+            for page_index, page_path in enumerate(page_paths):
                 words = run_ocr(page_path)
                 words = filter_noise_words(words)
                 lines = group_lines(words)
+
+                if page_index == 0:
+                    header_fields = parse_header_fields(lines, full_text(words))
 
                 if document_total is None:
                     document_total = extract_document_total(lines)
@@ -145,7 +160,18 @@ def extract_document(db: Session, document: Document) -> Bill:
                 all_candidate_items.extend(page_items)
                 serial_offset += len(page_items)
 
-        bill = bill_repository.create(db, document_id=document.id, currency=settings.default_currency)
+        bill = bill_repository.create(
+            db,
+            document_id=document.id,
+            currency=settings.default_currency,
+            vendor_name=header_fields.vendor_name,
+            vendor_address=header_fields.vendor_address,
+            vendor_gstin=header_fields.vendor_gstin,
+            vendor_phone=header_fields.vendor_phone,
+            vendor_email=header_fields.vendor_email,
+            invoice_number=header_fields.invoice_number,
+            invoice_date=header_fields.invoice_date,
+        )
 
         needs_review = len(all_candidate_items) == 0
         line_results = []

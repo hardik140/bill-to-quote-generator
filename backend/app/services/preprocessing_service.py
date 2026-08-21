@@ -225,6 +225,39 @@ def save_page_image(image: np.ndarray, out_dir: Path, page_index: int) -> Path:
     return out_path
 
 
+HEADER_CROP_FILENAME = "header_crop.png"
+HEADER_CROP_FRACTION = 0.22  # top slice of the page that typically holds a letterhead
+
+
+def generate_header_crop(source_path: Path, out_dir: Path, mime_type: str) -> Path | None:
+    """Saves the top slice of page 1's *original, unprocessed* rendering as
+    a plain image crop, for use as the Baseline PDF's letterhead visual.
+
+    Called unconditionally, independent of whether extraction takes the
+    digital-PDF fast path or the raster/OCR path -- this is a factual
+    reproduction of whatever the uploaded document actually shows (colour,
+    logo artwork, layout), never a generated or fabricated graphic, which
+    is why it's only ever used on the Baseline PDF ("SOURCE / BASELINE —
+    DERIVED FROM UPLOADED DOCUMENT"), never on Scenario B/C.
+    """
+    try:
+        if mime_type == "application/pdf":
+            pages = pdf_to_page_images(source_path)
+        else:
+            pages = [load_image(source_path)]
+        if not pages:
+            return None
+        raw = pages[0]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        h = raw.shape[0]
+        crop = raw[: int(h * HEADER_CROP_FRACTION), :]
+        out_path = out_dir / HEADER_CROP_FILENAME
+        cv2.imwrite(str(out_path), crop)
+        return out_path
+    except Exception:
+        return None  # letterhead image is a nice-to-have, never fatal to extraction
+
+
 def document_to_preprocessed_images(source_path: Path, out_dir: Path, mime_type: str) -> list[Path]:
     if mime_type == "application/pdf":
         raw_pages = pdf_to_page_images(source_path)
