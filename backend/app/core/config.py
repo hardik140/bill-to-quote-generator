@@ -57,6 +57,10 @@ class Settings(BaseSettings):
         return self.storage_root / "images"
 
     @property
+    def scenarios_dir(self) -> Path:
+        return BACKEND_ROOT / "scenarios"
+
+    @property
     def generated_dir(self) -> Path:
         return self.storage_root / "generated"
 
