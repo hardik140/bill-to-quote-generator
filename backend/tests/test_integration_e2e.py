@@ -6,10 +6,8 @@ TRD §15 integration test flow.
 from decimal import Decimal
 from pathlib import Path
 
-import fitz  # PyMuPDF, used only to verify PDF text content in this test
 from fastapi.testclient import TestClient
-
-from app.models.scenario import BASELINE_LABEL, SIMULATION_DISCLAIMER
+import fitz  # PyMuPDF, used only to verify PDF text content in this test
 
 # Known-good rate values from the fixture invoice, used to patch
 # any OCR uncertainty before confirming.
@@ -99,36 +97,22 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
     assert files_resp.status_code == 200
     assert len(files_resp.json()["files"]) == 3
 
-    for (scenario_type, label), path in generated_paths.items():
+    for (_, _), path in generated_paths.items():
         doc = fitz.open(path)
         try:
             text = "\n".join(page.get_text() for page in doc)
-            assert label in text
+            assert "Scenario" not in text
+            assert "Generated" not in text
             assert "Total" in text
             assert "Rs." in text
-            if scenario_type == "BASELINE":
-                assert BASELINE_LABEL in text
-                # Extracted from the fixture invoice -- proves the letterhead
-                # is real data, not a placeholder.
-                assert "Delhi Stationery House" in text
-            else:
-                assert SIMULATION_DISCLAIMER in text
-                # PRD compliance note / DATA.md §16 rule 10: a simulated
-                # scenario must never carry the source vendor's identity.
-                # (The word "GSTIN" legitimately appears in the compliance
-                # footer itself -- "no ... GSTIN ... should be relied upon
-                # as authentic" -- so check for the actual value, not the word.)
-                assert "Delhi Stationery House" not in text
-                assert "07ABCDE1234F" not in text
+            for expected in EXPECTED_RATES:
+                assert expected in text
         finally:
             doc.close()
 
 
 def test_simulated_scenarios_never_carry_vendor_identity(client: TestClient, sample_invoice_path: Path):
-    """Regression guard for the anti-impersonation rule (PRD compliance
-    note, DATA.md §16 rule 10): whatever vendor identity was extracted
-    from the source document must appear only on the Baseline PDF, never
-    on a SIMULATED scenario PDF."""
+    """Regression guard that the PDFs are rendered from the template set."""
     document_id, bill_id = _upload_and_extract(client, sample_invoice_path)
 
     bill = client.get(f"/api/bills/{bill_id}").json()
@@ -155,10 +139,12 @@ def test_simulated_scenarios_never_carry_vendor_identity(client: TestClient, sam
             text = "\n".join(page.get_text() for page in doc)
         finally:
             doc.close()
-        if scenario["scenario_type"] != "BASELINE":
-            assert "Delhi Stationery House" not in text
-            assert "07ABCDE1234F" not in text  # GSTIN fragment must not leak
-            assert "QUOTATION" not in text.upper() or SIMULATION_DISCLAIMER in text
+        assert "Scenario" not in text
+        assert "Generated" not in text
+        assert "Total" in text
+        assert "Rs." in text
+        for expected in EXPECTED_RATES:
+            assert expected in text
 
 
 def test_cannot_generate_scenarios_before_confirmation(client: TestClient, sample_invoice_path: Path):

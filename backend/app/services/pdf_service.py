@@ -1,8 +1,9 @@
 """PDF generation. PRD FR-11, TRD §14.
 
-Scenario PDFs now use the JPEGs in ``backend/scenarios`` as full-page
-templates. The generated PDF overlays only the bill data requested by the
-user: product lines, rates, and the total.
+Scenario PDFs use the JPEGs in ``backend/scenarios`` as full-page
+templates. Scenario 1 keeps the current table-style layout, while
+Scenario 2 and 3 use distinct table-free styles so they do not look
+similar to each other.
 """
 
 from __future__ import annotations
@@ -47,6 +48,82 @@ _table_cell_bold_style = ParagraphStyle(
     leading=10,
     textColor=colors.black,
 )
+_scenario2_product_style = ParagraphStyle(
+    "Scenario2Product",
+    parent=_styles["Normal"],
+    fontName="Times-Roman",
+    fontSize=11,
+    leading=13,
+    textColor=colors.HexColor("#1f2937"),
+)
+_scenario2_rate_style = ParagraphStyle(
+    "Scenario2Rate",
+    parent=_styles["Normal"],
+    fontName="Times-Bold",
+    fontSize=11,
+    leading=13,
+    textColor=colors.HexColor("#0f172a"),
+)
+_scenario2_label_style = ParagraphStyle(
+    "Scenario2Label",
+    parent=_styles["Normal"],
+    fontName="Helvetica",
+    fontSize=8,
+    leading=10,
+    textColor=colors.HexColor("#6b7280"),
+)
+_scenario2_total_style = ParagraphStyle(
+    "Scenario2Total",
+    parent=_styles["Normal"],
+    fontName="Times-Bold",
+    fontSize=13,
+    leading=15,
+    alignment=1,
+    textColor=colors.HexColor("#111827"),
+)
+_scenario3_product_style = ParagraphStyle(
+    "Scenario3Product",
+    parent=_styles["Normal"],
+    fontName="Courier-Bold",
+    fontSize=10.5,
+    leading=12,
+    textColor=colors.HexColor("#111111"),
+)
+_scenario3_rate_style = ParagraphStyle(
+    "Scenario3Rate",
+    parent=_styles["Normal"],
+    fontName="Courier",
+    fontSize=10.5,
+    leading=12,
+    textColor=colors.HexColor("#7c2d12"),
+)
+_scenario3_total_style = ParagraphStyle(
+    "Scenario3Total",
+    parent=_styles["Normal"],
+    fontName="Courier-Bold",
+    fontSize=12,
+    leading=14,
+    alignment=1,
+    textColor=colors.HexColor("#0f172a"),
+)
+_scenario3_desc_style = ParagraphStyle(
+    "Scenario3Desc",
+    parent=_styles["Normal"],
+    fontName="Helvetica",
+    fontSize=10.5,
+    leading=12,
+    textColor=colors.HexColor("#111827"),
+)
+_scenario3_amount_style = ParagraphStyle(
+    "Scenario3Amount",
+    parent=_styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=10.5,
+    leading=12,
+    textColor=colors.HexColor("#0f172a"),
+)
+
+
 def _money(value: Decimal) -> str:
     return f"Rs. {value:,.2f}"
 
@@ -65,17 +142,24 @@ def _filename_for(scenario: Scenario) -> str:
 def _template_path_for(scenario: Scenario) -> Path:
     label = scenario.label.lower()
     if scenario.scenario_type == TYPE_BASELINE:
-        return settings.scenarios_dir / "scenario_1.jpeg"
+        return settings.scenarios_dir / "scenario_11.jpeg"
     if "scenario c" in label:
-        return settings.scenarios_dir / "scenario_3.jpeg"
+        return settings.scenarios_dir / "scenario_33.jpeg"
     if "scenario b" in label:
-        return settings.scenarios_dir / "scenario_2.jpeg"
-    return settings.scenarios_dir / "scenario_1.jpeg"
+        return settings.scenarios_dir / "scenario_22.jpeg"
+    return settings.scenarios_dir / "scenario_11.jpeg"
 
 
 def _draw_template_background(c: canvas.Canvas, template_path: Path) -> None:
     image = ImageReader(str(template_path))
     c.drawImage(image, 0, 0, width=PAGE_WIDTH, height=PAGE_HEIGHT, mask="auto")
+
+
+def _draw_paragraph(c: canvas.Canvas, text: str, style: ParagraphStyle, x: float, y: float, width: float) -> float:
+    para = Paragraph(text, style)
+    _, height = para.wrap(width, PAGE_HEIGHT)
+    para.drawOn(c, x, y - height)
+    return height
 
 
 def _build_item_table(scenario: Scenario) -> Table:
@@ -117,7 +201,7 @@ def _build_item_table(scenario: Scenario) -> Table:
     return table
 
 
-def _draw_total_block(c: canvas.Canvas, scenario: Scenario) -> None:
+def _draw_total_block_table(c: canvas.Canvas, scenario: Scenario) -> None:
     total = Table(
         [[Paragraph("<b>Total</b>", _table_cell_bold_style), Paragraph(_money(scenario.grand_total), _table_cell_bold_style)]],
         colWidths=[136 * mm, 34 * mm],
@@ -133,8 +217,89 @@ def _draw_total_block(c: canvas.Canvas, scenario: Scenario) -> None:
             ]
         )
     )
-    width, height = total.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
+    total.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
     total.drawOn(c, CONTENT_LEFT, 86)
+
+
+def _draw_scenario1(c: canvas.Canvas, scenario: Scenario) -> None:
+    table = _build_item_table(scenario)
+    _, table_height = table.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
+    table_top = PAGE_HEIGHT - 75 * mm
+    table_bottom_limit = 105
+    table_y = max(table_bottom_limit, table_top - table_height)
+    table.drawOn(c, CONTENT_LEFT, table_y)
+    _draw_total_block_table(c, scenario)
+
+
+def _draw_scenario2(c: canvas.Canvas, scenario: Scenario) -> None:
+    top_y = PAGE_HEIGHT - 72 * mm
+    left_x = CONTENT_LEFT
+    rate_x = CONTENT_RIGHT
+    row_gap = 14 * mm
+
+    for idx, item in enumerate(scenario.items):
+        row_top = top_y - idx * row_gap
+        desc_para = Paragraph(item.description, _scenario2_product_style)
+        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 35 * mm, PAGE_HEIGHT)
+        desc_para.drawOn(c, left_x, row_top - desc_height)
+
+        c.setFont(_scenario2_rate_style.fontName, _scenario2_rate_style.fontSize)
+        c.setFillColor(_scenario2_rate_style.textColor)
+        c.drawRightString(rate_x, row_top - 3, _money(item.adjusted_rate))
+
+        c.setStrokeColor(colors.HexColor("#cbd5e1"))
+        c.setLineWidth(0.7)
+        c.line(left_x, row_top - row_gap + 1, rate_x, row_top - row_gap + 1)
+
+    total_y = 76
+    c.setStrokeColor(colors.HexColor("#94a3b8"))
+    c.setLineWidth(0.9)
+    c.line(CONTENT_LEFT, total_y + 1, CONTENT_RIGHT, total_y + 1)
+    _draw_paragraph(c, "Total", _scenario2_total_style, CONTENT_LEFT, total_y - 3, CONTENT_WIDTH * 0.3)
+    c.setFont(_scenario2_total_style.fontName, _scenario2_total_style.fontSize)
+    c.setFillColor(_scenario2_total_style.textColor)
+    c.drawRightString(CONTENT_RIGHT, total_y - 4, _money(scenario.grand_total))
+
+
+def _draw_scenario3(c: canvas.Canvas, scenario: Scenario) -> None:
+    left_x = CONTENT_LEFT
+    right_x = CONTENT_RIGHT
+    top_y = PAGE_HEIGHT - 84 * mm
+    row_gap = 14 * mm
+
+    c.setStrokeColor(colors.HexColor("#334155"))
+    c.setLineWidth(1.0)
+    c.line(left_x, top_y + 5, right_x, top_y + 5)
+    c.setFont("Helvetica-Bold", 10)
+    c.setFillColor(colors.HexColor("#334155"))
+    c.drawString(left_x, top_y - 2, "Description")
+    c.drawRightString(right_x, top_y - 2, "Amount")
+    c.setStrokeColor(colors.HexColor("#cbd5e1"))
+    c.line(left_x, top_y - 5, right_x, top_y - 5)
+
+    for idx, item in enumerate(scenario.items):
+        row_top = top_y - 10 * mm - idx * row_gap
+        desc_para = Paragraph(item.description, _scenario3_desc_style)
+        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 34 * mm, PAGE_HEIGHT)
+        desc_para.drawOn(c, left_x, row_top - desc_height)
+
+        c.setFont(_scenario3_amount_style.fontName, _scenario3_amount_style.fontSize)
+        c.setFillColor(_scenario3_amount_style.textColor)
+        c.drawRightString(right_x, row_top - 2, _money(item.adjusted_rate))
+
+        c.setStrokeColor(colors.HexColor("#e2e8f0"))
+        c.setLineWidth(0.7)
+        c.line(left_x, row_top - row_gap + 2, right_x, row_top - row_gap + 2)
+
+    total_y = 90
+    c.setFillColor(colors.HexColor("#ffffff"))
+    c.setStrokeColor(colors.HexColor("#334155"))
+    c.setLineWidth(1.0)
+    c.roundRect(CONTENT_LEFT, total_y - 16 * mm, CONTENT_WIDTH, 16 * mm, 4, fill=1, stroke=1)
+    _draw_paragraph(c, "Total", _scenario3_total_style, CONTENT_LEFT + 6, total_y - 3, CONTENT_WIDTH * 0.35)
+    c.setFont(_scenario3_total_style.fontName, _scenario3_total_style.fontSize)
+    c.setFillColor(_scenario3_total_style.textColor)
+    c.drawRightString(CONTENT_RIGHT - 4, total_y - 4, _money(scenario.grand_total))
 
 
 def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
@@ -149,14 +314,13 @@ def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
     if template_path.exists():
         _draw_template_background(c, template_path)
 
-    table = _build_item_table(scenario)
-    _, table_height = table.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
-    table_top = PAGE_HEIGHT - 75 * mm
-    table_bottom_limit = 105
-    table_y = max(table_bottom_limit, table_top - table_height)
-    table.drawOn(c, CONTENT_LEFT, table_y)
-
-    _draw_total_block(c, scenario)
+    label = scenario.label.lower()
+    if scenario.scenario_type == TYPE_BASELINE or "scenario a" in label:
+        _draw_scenario1(c, scenario)
+    elif "scenario c" in label:
+        _draw_scenario3(c, scenario)
+    else:
+        _draw_scenario2(c, scenario)
 
     c.showPage()
     c.save()
