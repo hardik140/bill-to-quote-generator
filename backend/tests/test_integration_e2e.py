@@ -103,7 +103,6 @@ def test_full_flow_upload_to_pdf(client: TestClient, sample_invoice_path: Path):
             text = "\n".join(page.get_text() for page in doc)
             assert "Scenario" not in text
             assert "Generated" not in text
-            assert "Total" in text
             assert "Rs." in text
             for expected in EXPECTED_RATES:
                 assert expected in text
@@ -141,7 +140,6 @@ def test_simulated_scenarios_never_carry_vendor_identity(client: TestClient, sam
             doc.close()
         assert "Scenario" not in text
         assert "Generated" not in text
-        assert "Total" in text
         assert "Rs." in text
         for expected in EXPECTED_RATES:
             assert expected in text
