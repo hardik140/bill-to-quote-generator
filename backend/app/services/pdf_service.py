@@ -17,6 +17,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 
@@ -124,6 +125,45 @@ _scenario3_amount_style = ParagraphStyle(
 )
 
 
+def _first_line_baseline_offset(style: ParagraphStyle) -> float:
+    """Distance below a Paragraph's top edge where its first text baseline falls.
+
+    A Paragraph draws each line's baseline near the bottom of its ``leading``
+    slot (offset by the font's descent), not at the slot's top edge. Plain
+    ``drawString``/``drawRightString`` calls that need to sit on the same
+    visual line as a Paragraph (e.g. a serial number next to a wrapped
+    description) must use this offset instead of a guessed constant.
+    """
+    _, descent = pdfmetrics.getAscentDescent(style.fontName, style.fontSize)
+    return style.leading - abs(descent)
+
+
+_scenario2_row_baseline_offset = _first_line_baseline_offset(_scenario2_product_style)
+_scenario3_row_baseline_offset = _first_line_baseline_offset(_scenario3_desc_style)
+
+
+def _draw_tracked_string(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    font_name: str,
+    font_size: float,
+    char_space: float,
+    color: colors.Color,
+    align: str = "left",
+) -> None:
+    """Draw text with letter-spacing (canvas.Canvas has no public setCharSpace)."""
+    width = pdfmetrics.stringWidth(text, font_name, font_size) + char_space * max(len(text) - 1, 0)
+    start_x = x - width if align == "right" else x
+    text_obj = c.beginText(start_x, y)
+    text_obj.setFont(font_name, font_size)
+    text_obj.setFillColor(color)
+    text_obj.setCharSpace(char_space)
+    text_obj.textOut(text)
+    c.drawText(text_obj)
+
+
 def _money(value: Decimal) -> str:
     return f"Rs. {value:,.2f}"
 
@@ -201,64 +241,109 @@ def _build_item_table(scenario: Scenario) -> Table:
     return table
 
 
-def _draw_scenario1(c: canvas.Canvas, scenario: Scenario) -> None:
+def _draw_scenario1(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
     table = _build_item_table(scenario)
-    _, table_height = table.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
     table_top = PAGE_HEIGHT - 75 * mm
     table_bottom_limit = 105
-    table_y = max(table_bottom_limit, table_top - table_height)
-    table.drawOn(c, CONTENT_LEFT, table_y)
+    available_height = table_top - table_bottom_limit
+
+    _, table_height = table.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
+
+    while table_height > available_height:
+        parts = table.split(CONTENT_WIDTH, available_height)
+        if len(parts) < 2:
+            break  # a single row taller than a page; nothing more we can do
+        head, table = parts
+        _, head_height = head.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
+        head.drawOn(c, CONTENT_LEFT, table_top - head_height)
+
+        c.showPage()
+        if template_path.exists():
+            _draw_template_background(c, template_path)
+
+        _, table_height = table.wrap(CONTENT_WIDTH, PAGE_HEIGHT)
+
+    table.drawOn(c, CONTENT_LEFT, max(table_bottom_limit, table_top - table_height))
 
 
-def _draw_scenario2(c: canvas.Canvas, scenario: Scenario) -> None:
+def _draw_scenario2(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
     top_y = PAGE_HEIGHT - 72 * mm
     left_x = CONTENT_LEFT
+    serial_width = 8 * mm
+    desc_x = left_x + serial_width
     rate_x = CONTENT_RIGHT
     row_gap = 14 * mm
+    bottom_limit = 25 * mm  # scenario_22.jpeg has no footer artwork; just clear the physical page edge
 
-    for idx, item in enumerate(scenario.items):
-        row_top = top_y - idx * row_gap
+    row_top = top_y
+    for idx, item in enumerate(scenario.items, start=1):
         desc_para = Paragraph(item.description, _scenario2_product_style)
-        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 35 * mm, PAGE_HEIGHT)
-        desc_para.drawOn(c, left_x, row_top - desc_height)
+        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 35 * mm - serial_width, PAGE_HEIGHT)
+
+        if row_top - desc_height < bottom_limit:
+            c.showPage()
+            if template_path.exists():
+                _draw_template_background(c, template_path)
+            row_top = top_y
+
+        baseline_y = row_top - _scenario2_row_baseline_offset
+
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.HexColor("#6b7280"))
+        c.drawString(left_x, baseline_y, f"{idx}.")
+
+        desc_para.drawOn(c, desc_x, row_top - desc_height)
 
         c.setFont(_scenario2_rate_style.fontName, _scenario2_rate_style.fontSize)
         c.setFillColor(_scenario2_rate_style.textColor)
-        c.drawRightString(rate_x, row_top - 3, _money(item.adjusted_rate))
+        c.drawRightString(rate_x, baseline_y, _money(item.adjusted_rate))
 
-        c.setStrokeColor(colors.HexColor("#cbd5e1"))
-        c.setLineWidth(0.7)
-        c.line(left_x, row_top - row_gap + 1, rate_x, row_top - row_gap + 1)
+        row_top -= row_gap
 
-def _draw_scenario3(c: canvas.Canvas, scenario: Scenario) -> None:
+
+def _draw_scenario3(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
     left_x = CONTENT_LEFT
     right_x = CONTENT_RIGHT
-    top_y = PAGE_HEIGHT - 84 * mm
+    top_y = PAGE_HEIGHT - 54 * mm
     row_gap = 14 * mm
+    serial_width = 8 * mm
+    desc_x = left_x + serial_width
+    # scenario_33.jpeg's "DELIVERING your SATISFACTION" footer artwork starts ~260mm
+    # from the top (measured directly from the template image); keep rows above it.
+    bottom_limit = PAGE_HEIGHT - 245 * mm
 
-    c.setStrokeColor(colors.HexColor("#334155"))
-    c.setLineWidth(1.0)
-    c.line(left_x, top_y + 5, right_x, top_y + 5)
-    c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(colors.HexColor("#334155"))
-    c.drawString(left_x, top_y - 2, "Description")
-    c.drawRightString(right_x, top_y - 2, "Amount")
-    c.setStrokeColor(colors.HexColor("#cbd5e1"))
-    c.line(left_x, top_y - 5, right_x, top_y - 5)
+    def draw_column_header(y: float) -> None:
+        header_color = colors.HexColor("#0f172a")
+        _draw_tracked_string(c, desc_x, y - 2, "DESCRIPTION", "Helvetica-Bold", 9, 0.8, header_color)
+        _draw_tracked_string(c, right_x, y - 2, "AMOUNT", "Helvetica-Bold", 9, 0.8, header_color, align="right")
 
-    for idx, item in enumerate(scenario.items):
-        row_top = top_y - 10 * mm - idx * row_gap
+    draw_column_header(top_y)
+    row_top = top_y - 10 * mm
+
+    for idx, item in enumerate(scenario.items, start=1):
         desc_para = Paragraph(item.description, _scenario3_desc_style)
-        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 34 * mm, PAGE_HEIGHT)
-        desc_para.drawOn(c, left_x, row_top - desc_height)
+        _, desc_height = desc_para.wrap(CONTENT_WIDTH - 34 * mm - serial_width, PAGE_HEIGHT)
+
+        if row_top - desc_height < bottom_limit:
+            c.showPage()
+            if template_path.exists():
+                _draw_template_background(c, template_path)
+            draw_column_header(top_y)
+            row_top = top_y - 10 * mm
+
+        baseline_y = row_top - _scenario3_row_baseline_offset
+
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.HexColor("#64748b"))
+        c.drawString(left_x, baseline_y, f"{idx}.")
+
+        desc_para.drawOn(c, desc_x, row_top - desc_height)
 
         c.setFont(_scenario3_amount_style.fontName, _scenario3_amount_style.fontSize)
         c.setFillColor(_scenario3_amount_style.textColor)
-        c.drawRightString(right_x, row_top - 2, _money(item.adjusted_rate))
+        c.drawRightString(right_x, baseline_y, _money(item.adjusted_rate))
 
-        c.setStrokeColor(colors.HexColor("#e2e8f0"))
-        c.setLineWidth(0.7)
-        c.line(left_x, row_top - row_gap + 2, right_x, row_top - row_gap + 2)
+        row_top -= row_gap
 
 def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
     out_dir = settings.generated_dir / bill.id
@@ -274,11 +359,11 @@ def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
 
     label = scenario.label.lower()
     if scenario.scenario_type == TYPE_BASELINE or "scenario a" in label:
-        _draw_scenario1(c, scenario)
+        _draw_scenario1(c, scenario, template_path)
     elif "scenario c" in label:
-        _draw_scenario3(c, scenario)
+        _draw_scenario3(c, scenario, template_path)
     else:
-        _draw_scenario2(c, scenario)
+        _draw_scenario2(c, scenario, template_path)
 
     c.showPage()
     c.save()

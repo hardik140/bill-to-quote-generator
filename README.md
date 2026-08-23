@@ -48,15 +48,20 @@ frontend/
 
 ## Prerequisites
 
-Already expected on this machine (adjust paths in
-`backend/app/core/config.py` if yours differ):
-
-- Python 3.12+
+- Python 3.11+ (3.12 also verified)
 - Node.js 18+
-- Tesseract-OCR binary (`APP_TESSERACT_CMD`, default
-  `C:\Users\91981\Tesseract-OCR\tesseract.exe`)
-- Poppler `bin/` directory (`APP_POPPLER_PATH`) — used as a fallback path
-  hint; primary PDF rendering goes through PyMuPDF and doesn't need it.
+
+No separate OCR binary install is required — OCR runs via the `paddleocr`
+PyPI package (`backend/requirements.txt`), which brings its own models and
+CPU inference runtime. Poppler is optional (`APP_POPPLER_PATH`); primary
+PDF rendering goes through PyMuPDF and doesn't need it.
+
+On first OCR run, `paddleocr` downloads its model weights (several hundred
+MB) to a local cache (`~/.paddlex/official_models`) — this needs internet
+access once; subsequent runs use the cache. CPU inference is noticeably
+slower than the OCR engine this project started with (multiple
+seconds-to-minutes per page depending on document size), and if a page
+triggers the confidence-based retry, that cost repeats once more per page.
 
 ## Setup
 
