@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.services.line_grouping import group_lines
-from app.services.ocr_service import OcrWord
+from app.services.ocr.engine import OcrWord
 from app.services.table_parser import parse_table
 
 LINE_HEIGHT = 30
@@ -184,6 +184,12 @@ def test_clean_description():
     # Product names starting with numbers (not matching serial) are preserved
     assert _clean_description("2 Inch Binder Ring", 1) == "2 Inch Binder Ring"
     assert _clean_description("75 GSM Copier Paper", 2) == "75 GSM Copier Paper"
+
+    # Empty descriptions must clean to empty, not a mangled placeholder --
+    # the "(unspecified)" fallback is applied by the caller *after*
+    # cleaning, never fed through the noise-stripping regexes itself
+    # (previously the leading "(" was stripped, leaving "unspecified)").
+    assert _clean_description("", 1) == ""
 
 
 def test_stop_lines_extended():

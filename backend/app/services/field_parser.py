@@ -20,11 +20,18 @@ from app.services.normalization_service import parse_decimal_loose
 
 GRAND_TOTAL_RE = re.compile(r"grand\s*total|net\s*amount|total\s*amount\s*payable|^total\b", re.IGNORECASE)
 
-GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]Z[A-Z\d]\b")
+GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]\dZ[A-Z\d]\b")
 INVOICE_NO_RE = re.compile(
     r"(?:invoice|bill|ref)\s*(?:no\.?|number|#)\s*[:\-]?\s*([A-Z0-9/\-]{2,})", re.IGNORECASE
 )
 DATE_RE = re.compile(r"\b([0-3]?\d)[/\-.]([0-1]?\d)[/\-.](\d{2,4})\b")
+# "29-Jul-26" / "2 May 2026" style dates -- common on Indian invoices where
+# the month is printed as a name rather than a number.
+DATE_TEXT_MONTH_RE = re.compile(r"\b([0-3]?\d)[-\s]([A-Za-z]{3,9})[-\s](\d{2,4})\b")
+MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 DATE_LABEL_RE = re.compile(r"\bdate\b", re.IGNORECASE)
 BOILERPLATE_RE = re.compile(
     r"^(tax\s+invoice|invoice|bill|estimate|quotation|original|duplicate)$", re.IGNORECASE
@@ -69,6 +76,32 @@ def _parse_date(match: re.Match) -> date | None:
             return None
 
 
+def _parse_date_text_month(match: re.Match) -> date | None:
+    d, month_name, y = match.groups()
+    month = MONTH_ABBR.get(month_name.lower()[:3])
+    if month is None:
+        return None
+    y = int(y)
+    if y < 100:
+        y += 2000
+    try:
+        return date(y, month, int(d))
+    except ValueError:
+        return None
+
+
+def _find_date_in_text(text: str) -> date | None:
+    match = DATE_RE.search(text)
+    if match:
+        parsed = _parse_date(match)
+        if parsed:
+            return parsed
+    match = DATE_TEXT_MONTH_RE.search(text)
+    if match:
+        return _parse_date_text_month(match)
+    return None
+
+
 def extract_document_total(lines: list[OcrLine]) -> Decimal | None:
     for line in reversed(lines):
         if GRAND_TOTAL_RE.search(line.text):
@@ -91,17 +124,13 @@ def extract_invoice_number(text: str) -> str | None:
 def extract_invoice_date(lines: list[OcrLine]) -> date | None:
     for line in lines:
         if DATE_LABEL_RE.search(line.text):
-            match = DATE_RE.search(line.text)
-            if match:
-                parsed = _parse_date(match)
-                if parsed:
-                    return parsed
-    for line in lines:
-        match = DATE_RE.search(line.text)
-        if match:
-            parsed = _parse_date(match)
+            parsed = _find_date_in_text(line.text)
             if parsed:
                 return parsed
+    for line in lines:
+        parsed = _find_date_in_text(line.text)
+        if parsed:
+            return parsed
     return None
 
 
@@ -117,18 +146,45 @@ def extract_email(text: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _leftmost_cell_text(line: OcrLine) -> str:
+    """The vendor's own block is conventionally the leftmost column of the
+    header -- true whether the header is a single stacked column (a plain
+    letterhead, where the "line" and its one cell are the same thing) or a
+    bordered multi-column table (common on Indian GST invoices: a vendor
+    block beside an "Invoice No./Dated" block beside a "Delivery Note"
+    block, all on the same printed row). `group_lines` clusters purely by
+    y-position, so a table row's full `line.text` spans every column
+    concatenated left to right -- using only the first x-gap-clustered cell
+    keeps vendor-name/address extraction inside the vendor's own column
+    instead of bleeding in neighbouring columns' labels and values.
+    """
+    cells = line.cells()
+    return cells[0].text.strip() if cells else line.text.strip()
+
+
+def _is_mostly_phone(text: str, match: re.Match) -> bool:
+    """True when *text* is basically just a phone number (optionally with a
+    short label like "Contact:") rather than a line that happens to end
+    with one -- guards against excluding a genuine address/name line just
+    because it contains a phone-shaped digit run.
+    """
+    remainder = text[: match.start()] + text[match.end() :]
+    return len(remainder.strip(" :.-")) < 10
+
+
 def extract_vendor_name(lines: list[OcrLine]) -> str | None:
     """Heuristic: the vendor's printed business name is almost always the
     largest/topmost non-boilerplate line on the first page (a letterhead)."""
     for line in lines[:8]:
-        text = line.text.strip()
+        text = _leftmost_cell_text(line)
         if len(text) < 3:
             continue
         if BOILERPLATE_RE.match(text):
             continue
         if GSTIN_RE.search(text.upper()) or DATE_RE.search(text) or EMAIL_RE.search(text):
             continue
-        if PHONE_RE.search(text) and len(text) < 20:
+        phone_match = PHONE_RE.search(text)
+        if phone_match and _is_mostly_phone(text, phone_match):
             continue  # a lone phone-number line, not a business name
         return text
     return None
@@ -139,17 +195,18 @@ def extract_vendor_address(lines: list[OcrLine], vendor_name: str | None) -> str
         return None
     start = None
     for i, line in enumerate(lines[:10]):
-        if line.text.strip() == vendor_name:
+        if _leftmost_cell_text(line) == vendor_name:
             start = i + 1
             break
     if start is None:
         return None
     parts = []
     for line in lines[start : start + 3]:
-        text = line.text.strip()
+        text = _leftmost_cell_text(line)
         if not text or NON_ADDRESS_HINT_RE.search(text) or GSTIN_RE.search(text.upper()):
             break
-        if EMAIL_RE.search(text) or (PHONE_RE.search(text) and len(text) < 20):
+        phone_match = PHONE_RE.search(text)
+        if EMAIL_RE.search(text) or (phone_match and _is_mostly_phone(text, phone_match)):
             break
         parts.append(text)
     return ", ".join(parts) if parts else None

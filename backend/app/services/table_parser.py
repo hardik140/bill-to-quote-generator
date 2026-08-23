@@ -233,6 +233,36 @@ def _assign_cells_to_columns(cells: list[OcrCell], columns: dict[str, float]) ->
     return assigned
 
 
+# On a real GST invoice, genuine Sl.No. and HSN/SAC content is always
+# purely numeric. Nearest-centroid assignment can still misplace the
+# leading or trailing word(s) of a wide free-text description into one of
+# these columns when the header label sits well away from where
+# left-aligned content actually starts (e.g. "Student Attendance Register
+# No. 2" landing partly in the serial/HSN columns -- verified against a
+# real photographed invoice, 2026-08-23). Any letters landing in either
+# column are therefore essentially always a misassigned description word,
+# not real content -- unlike RATE/AMOUNT/QTY/GST, where a stray letter is
+# more likely OCR noise on a genuine numeric value and reassigning it would
+# risk the opposite mistake.
+_ALWAYS_NUMERIC_COLS = (COL_SERIAL, COL_HSN)
+
+
+def _reclaim_description_words(assigned: dict[str, list[OcrCell]]) -> None:
+    """Moves any lettered cell out of the always-numeric columns and back
+    into the description, in left-to-right order. Mutates *assigned*.
+    """
+    reclaimed: list[OcrCell] = []
+    for col_type in _ALWAYS_NUMERIC_COLS:
+        cells = assigned.get(col_type)
+        if not cells:
+            continue
+        keep = [c for c in cells if not any(ch.isalpha() for ch in c.text)]
+        reclaimed.extend(c for c in cells if any(ch.isalpha() for ch in c.text))
+        assigned[col_type] = keep
+    if reclaimed:
+        assigned[COL_DESCRIPTION] = sorted(assigned.get(COL_DESCRIPTION, []) + reclaimed, key=lambda c: c.left)
+
+
 @dataclass
 class CandidateItem:
     serial_no: int
@@ -290,7 +320,7 @@ def _parse_headerless_fallback(lines: list[OcrLine]) -> list[CandidateItem]:
         items.append(
             CandidateItem(
                 serial_no=auto_serial,
-                description=desc_text or f"Item {auto_serial}",
+                description=desc_text,
                 hsn_sac=None,
                 gst_rate=Decimal("0"),
                 quantity=qty_val,
@@ -325,6 +355,7 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
             continue
 
         assigned = _assign_cells_to_columns(cells, header.columns)
+        _reclaim_description_words(assigned)
         description = " ".join(c.text for c in assigned.get(COL_DESCRIPTION, [])).strip()
         numeric_present = any(col in assigned for col in NUMERIC_COLS)
 
@@ -389,7 +420,7 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
         items.append(
             CandidateItem(
                 serial_no=serial_no,
-                description=description or "(unspecified)",
+                description=description,
                 hsn_sac=joined(COL_HSN),
                 gst_rate=gst_rate,
                 quantity=quantity,

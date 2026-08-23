@@ -1,4 +1,3 @@
-import shutil
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,17 +21,19 @@ class Settings(BaseSettings):
         "image/png",
     )
 
-    # OCR toolchain (local, pre-installed on this machine)
-    tesseract_cmd: str = r"C:\Users\91981\Tesseract-OCR\tesseract.exe"
+    # OCR toolchain
     poppler_path: str = r"C:\Users\91981\poppler-24.08.0\Library\bin"
-    ocr_language: str = "eng"
-    ocr_processor_name: str = "pytesseract"
-    ocr_processor_version: str = "5.5.0"
-    # --psm 4 = single column of text blocks: best for bordered invoice forms.
-    # --dpi 300 = tell Tesseract the real resolution so it calibrates character
-    # height correctly (without this it assumes ~70dpi and mis-sizes everything).
-    # preserve_interword_spaces keeps wide column gaps intact for cell grouping.
-    tesseract_config: str = "--psm 4 --dpi 300 -c preserve_interword_spaces=1"
+    ocr_language: str = "en"
+    ocr_processor_name: str = "paddleocr"
+    ocr_processor_version: str = "3.7.0"
+    # PIR/oneDNN combination crashes CPU inference on at least one Windows
+    # dev machine (NotImplementedError in onednn_instruction.cc, verified
+    # 2026-08-23) -- disabling MKLDNN is a real, measured perf/stability
+    # tradeoff (~70s/page with it off vs. a crash with it on), not a
+    # speculative default. Revisit once paddlepaddle ships a fix, and check
+    # whether Render's Linux container hits the same bug at all before
+    # assuming this setting is needed there too.
+    ocr_enable_mkldnn: bool = False
 
     # Server (localhost only, per TRD security architecture)
     host: str = "127.0.0.1"
@@ -68,21 +69,10 @@ class Settings(BaseSettings):
     def temp_dir(self) -> Path:
         return self.storage_root / "temp"
 
-    def resolved_tesseract_cmd(self) -> str:
-        if self.tesseract_cmd and Path(self.tesseract_cmd).exists():
-            return self.tesseract_cmd
-        found = shutil.which("tesseract")
-        if found:
-            return found
-        for common_path in ("/usr/bin/tesseract", "/usr/local/bin/tesseract"):
-            if Path(common_path).exists():
-                return common_path
-        return "tesseract"
-
     def resolved_poppler_path(self) -> str | None:
         if Path(self.poppler_path).exists():
             return self.poppler_path
-        return None  # pdf2image will fall back to PATH lookup
+        return None  # caller falls back to a PATH lookup
 
     def ensure_storage_dirs(self) -> None:
         for d in (self.uploads_dir, self.images_dir, self.generated_dir, self.temp_dir):

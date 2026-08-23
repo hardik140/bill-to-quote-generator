@@ -4,7 +4,7 @@ building block for both header-field parsing and table-column parsing.
 
 from dataclasses import dataclass
 
-from app.services.ocr_service import OcrWord
+from app.services.ocr.engine import OcrWord
 
 CELL_GAP_FACTOR = 1.8  # gap > this * avg char width => new cell
 

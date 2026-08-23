@@ -8,13 +8,13 @@ doubt, the word is kept (better to have noise than to silently discard data).
 
 import re
 
-from app.services.ocr_service import OcrWord
+from app.services.ocr.engine import OcrWord
 
 # Characters that, when they make up the *entire* word, are pure OCR artefacts
 # from ruled table borders: vertical bar, backslash, braces, tilde, brackets.
 _PURE_NOISE_RE = re.compile(r"^[|\\/{}\[\]~`_*#]+$")
 
-# Minimum confidence to retain a word (Tesseract native 0-100 scale).
+# Minimum confidence to retain a word (0-100 scale).
 _MIN_CONFIDENCE = 20.0
 
 # OCR digit/letter confusions in purely numeric contexts.

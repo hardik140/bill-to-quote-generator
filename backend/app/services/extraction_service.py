@@ -26,12 +26,13 @@ from app.core.config import settings
 from app.models.bill import EXTRACTION_COMPLETED, EXTRACTION_NEEDS_REVIEW, Bill
 from app.models.document import STATUS_FAILED, STATUS_PROCESSED, STATUS_PROCESSING, Document
 from app.repositories import bill_repository, document_repository, processing_run_repository
-from app.services import preprocessing_service
 from app.services.calculation_service import compute_bill_totals, compute_line
 from app.services.field_parser import HeaderFields, extract_document_total, parse_header_fields
 from app.services.line_grouping import group_lines
-from app.services.ocr_postprocess import filter_noise_words
-from app.services.ocr_service import full_text, run_ocr
+from app.services.ocr import confidence as ocr_confidence
+from app.services.ocr import preprocessing
+from app.services.ocr.engine import full_text
+from app.services.ocr.postprocess import filter_noise_words
 from app.services.table_parser import CandidateItem, parse_table
 from app.services.validation_service import check_total_reconciliation
 
@@ -110,16 +111,17 @@ def extract_document(db: Session, document: Document) -> Bill:
         # Baseline-PDF letterhead visual: a factual crop of the source
         # document's own header, independent of which extraction path
         # below actually runs (the digital fast-path never rasterizes).
-        preprocessing_service.generate_header_crop(source_path, image_out_dir, document.mime_type)
+        preprocessing.generate_header_crop(source_path, image_out_dir, document.mime_type)
 
         all_candidate_items: list[CandidateItem] = []
         document_total: Decimal | None = None
         header_fields = HeaderFields()
         serial_offset = 0
+        attempts_used = 1
 
         # 1. Fast-path: try native vector PDF text extraction if digital PDF
         if document.mime_type == "application/pdf":
-            digital_pages_words = preprocessing_service.extract_digital_pdf_words(source_path)
+            digital_pages_words = preprocessing.extract_digital_pdf_words(source_path)
             if digital_pages_words:
                 for page_index, page_words in enumerate(digital_pages_words):
                     words = filter_noise_words(page_words)
@@ -136,7 +138,7 @@ def extract_document(db: Session, document: Document) -> Bill:
 
         # 2. Fallback / Scanned / Image path: raster preprocessing + OCR
         if not all_candidate_items:
-            page_paths = preprocessing_service.document_to_preprocessed_images(
+            page_paths = preprocessing.document_to_preprocessed_images(
                 source_path, image_out_dir, document.mime_type
             )
             if not page_paths:
@@ -144,7 +146,10 @@ def extract_document(db: Session, document: Document) -> Bill:
 
             serial_offset = 0
             for page_index, page_path in enumerate(page_paths):
-                words = run_ocr(page_path)
+                words, page_attempts = ocr_confidence.run_page_with_retry(
+                    source_path, document.mime_type, page_index, page_path, image_out_dir
+                )
+                attempts_used = max(attempts_used, page_attempts)
                 words = filter_noise_words(words)
                 lines = group_lines(words)
 
@@ -187,11 +192,13 @@ def extract_document(db: Session, document: Document) -> Bill:
             if candidate.ambiguous or is_low_confidence or rate is None:
                 needs_review = True
 
+            cleaned_description = _clean_description(candidate.description, candidate.serial_no) or "(unspecified)"
+
             bill_repository.add_item(
                 db,
                 bill,
                 serial_no=candidate.serial_no,
-                description=_clean_description(candidate.description, candidate.serial_no),
+                description=cleaned_description,
                 gst_rate=gst_rate,
                 quantity=quantity,
                 source_rate=candidate.source_rate if candidate.source_rate is not None else (rate if rate is not None else Decimal("0")),
@@ -214,7 +221,7 @@ def extract_document(db: Session, document: Document) -> Bill:
         bill.extraction_status = EXTRACTION_NEEDS_REVIEW if needs_review else EXTRACTION_COMPLETED
 
         document_repository.set_status(db, document, STATUS_PROCESSED)
-        processing_run_repository.complete(db, run)
+        processing_run_repository.complete(db, run, attempts_used=attempts_used)
         db.commit()
         db.refresh(bill)
         return bill

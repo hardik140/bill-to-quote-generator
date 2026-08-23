@@ -12,9 +12,10 @@ def start(db: Session, document_id: str, processor: str, processor_version: str)
     return run
 
 
-def complete(db: Session, run: ProcessingRun) -> None:
+def complete(db: Session, run: ProcessingRun, attempts_used: int | None = None) -> None:
     run.status = RUN_COMPLETED
     run.completed_at = datetime.utcnow()
+    run.attempts_used = attempts_used
     db.flush()
 
 

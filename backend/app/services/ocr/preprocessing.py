@@ -7,9 +7,9 @@ from pathlib import Path
 import cv2
 import fitz  # PyMuPDF
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
-from app.services.ocr_service import OcrWord
+from app.services.ocr.engine import OcrWord
 
 MIN_WIDTH_PX = 2000
 
@@ -76,7 +76,9 @@ def pdf_to_page_images(pdf_path: Path, dpi: int = 300) -> list[np.ndarray]:
 
 
 def load_image(path: Path) -> np.ndarray:
-    pil_img = Image.open(path).convert("RGB")
+    pil_img = Image.open(path)
+    pil_img = ImageOps.exif_transpose(pil_img)  # phone photos often carry an EXIF rotation tag
+    pil_img = pil_img.convert("RGB")
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
@@ -154,38 +156,139 @@ def _remove_grid_lines(gray: np.ndarray) -> np.ndarray:
     return cleaned_gray
 
 
-def _crop_document_area(image_bgr: np.ndarray) -> np.ndarray:
-    """Isolate the document if captured on an obvious background surface."""
+def _order_quad_points(pts: np.ndarray) -> np.ndarray:
+    """Sorts 4 arbitrary corner points into [top-left, top-right,
+    bottom-right, bottom-left] via the standard sum/diff trick: top-left has
+    the smallest x+y, bottom-right the largest x+y, top-right the smallest
+    y-x, bottom-left the largest y-x.
+    """
+    pts = pts.reshape(4, 2).astype(np.float32)
+    sums = pts.sum(axis=1)
+    diffs = (pts[:, 1] - pts[:, 0])
+    ordered = np.zeros((4, 2), dtype=np.float32)
+    ordered[0] = pts[np.argmin(sums)]
+    ordered[2] = pts[np.argmax(sums)]
+    ordered[1] = pts[np.argmin(diffs)]
+    ordered[3] = pts[np.argmax(diffs)]
+    return ordered
+
+
+def _approx_quad(hull: np.ndarray) -> np.ndarray | None:
+    """Reduces a convex hull to a 4-point polygon. Sweeps the
+    `approxPolyDP` tolerance upward -- a physically imperfect page edge
+    (curl, a folded/dog-eared corner) routinely breaks a *raw* contour's
+    4-point approximation at a fixed tolerance, but its convex hull, given
+    enough tolerance, still collapses cleanly to 4 points. Falls back to the
+    hull's minimum-area bounding rectangle if no tolerance in the sweep
+    yields exactly 4, so a page with real physical damage still gets a
+    reasonable quad instead of no quad at all.
+    """
+    peri = cv2.arcLength(hull, True)
+    for eps_frac in (0.02, 0.03, 0.05, 0.08, 0.1):
+        approx = cv2.approxPolyDP(hull, eps_frac * peri, True)
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            return approx.reshape(4, 2)
+    rect = cv2.minAreaRect(hull)
+    return cv2.boxPoints(rect)
+
+
+def _find_document_quad(image_bgr: np.ndarray) -> np.ndarray | None:
+    """Locates the 4-corner outline of a photographed document page via edge
+    detection -- the classic "scanner app" approach. Returns ordered corner
+    points in original-image coordinates, or None if no candidate
+    confidently looks like a document page against its background (never
+    guesses when uncertain: a wrong crop is worse than no crop).
+    """
     h, w = image_bgr.shape[:2]
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (9, 9), 0)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    work_width = 1000.0
+    scale = work_width / w if w > work_width else 1.0
+    small = (
+        cv2.resize(image_bgr, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+        if scale < 1.0
+        else image_bgr
+    )
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    # Edge-preserving smoothing survives cluttered/textured backgrounds
+    # (e.g. a keyboard) far better than a global blur + Otsu threshold.
+    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
+    edges = cv2.Canny(filtered, 50, 150)
+    edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        return image_bgr
+        return None
 
-    img_area = h * w
-    best_rect = None
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if 0.50 * img_area < area < 0.98 * img_area:
-            x, y, cw, ch = cv2.boundingRect(cnt)
-            if cw > 0.5 * w and ch > 0.5 * h:
-                best_rect = (x, y, cw, ch)
-                break
+    frame_area = small.shape[0] * small.shape[1]
+    candidates = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
 
-    if best_rect:
-        x, y, cw, ch = best_rect
-        pad_x = int(0.02 * cw)
-        pad_y = int(0.02 * ch)
-        x0 = max(0, x - pad_x)
-        y0 = max(0, y - pad_y)
-        x1 = min(w, x + cw + pad_x)
-        y1 = min(h, y + ch + pad_y)
-        return image_bgr[y0:y1, x0:x1]
+    best_quad: np.ndarray | None = None
+    best_area = 0.0
+    for cnt in candidates:
+        # The hull, not the raw contour, is what gets area-checked and
+        # quad-approximated: a curled/folded edge undercounts the raw
+        # contour's area and shatters its polygon approximation, but the
+        # hull still represents "how much of the frame the page occupies."
+        hull = cv2.convexHull(cnt)
+        area = cv2.contourArea(hull)
+        if not (0.15 * frame_area < area < 0.97 * frame_area):
+            continue
 
-    return image_bgr
+        quad = _approx_quad(hull)
+        if quad is None:
+            continue
+
+        ordered = _order_quad_points(quad)
+        side_lengths = [float(np.linalg.norm(ordered[i] - ordered[(i + 1) % 4])) for i in range(4)]
+        if min(side_lengths) < 0.2 * max(side_lengths):
+            continue  # sliver / false positive, e.g. one edge of a keyboard
+
+        if area > best_area:
+            best_area = area
+            best_quad = ordered
+
+    if best_quad is None:
+        return None
+
+    return best_quad / scale
+
+
+def _warp_quad(image_bgr: np.ndarray, quad: np.ndarray) -> np.ndarray:
+    """Perspective-warps *image_bgr* so the given quadrilateral becomes a
+    top-down axis-aligned rectangle, sized from the quad's own measured
+    pixel dimensions (so output resolution reflects the photographed page,
+    not an arbitrary fixed size).
+    """
+    tl, tr, br, bl = quad
+    width = max(1, int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))))
+    height = max(1, int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))))
+    dst = np.array(
+        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(quad.astype(np.float32), dst)
+    return cv2.warpPerspective(
+        image_bgr,
+        matrix,
+        (width, height),
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),  # white fill so stray corner gaps don't
+    )                                  # inject a dark border into Otsu/CLAHE downstream
+
+
+def _correct_perspective(image_bgr: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Detects and perspective-corrects the document page in a photographed
+    image. Returns (image, corrected) -- when no confident document
+    quadrilateral is found, returns the original image unchanged rather
+    than guessing.
+    """
+    quad = _find_document_quad(image_bgr)
+    if quad is None:
+        return image_bgr, False
+    warped = _warp_quad(image_bgr, quad)
+    if warped.shape[0] < 50 or warped.shape[1] < 50:
+        return image_bgr, False
+    return warped, True
 
 
 def _normalize_illumination(gray: np.ndarray) -> np.ndarray:
@@ -202,11 +305,12 @@ def _normalize_illumination(gray: np.ndarray) -> np.ndarray:
 
 
 def preprocess_page(image_bgr: np.ndarray) -> np.ndarray:
-    """Preprocess document for OCR: illumination normalization, deskew,
-    resolution normalization, contrast enhancement, and grid-line attenuation.
+    """Preprocess document for OCR: perspective correction, illumination
+    normalization, deskew, resolution normalization, contrast enhancement,
+    and grid-line attenuation.
     """
-    cropped_bgr = _crop_document_area(image_bgr)
-    gray = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2GRAY)
+    corrected_bgr, _ = _correct_perspective(image_bgr)
+    gray = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2GRAY)
     gray = _normalize_resolution(gray)
     gray = _normalize_illumination(gray)
     gray = _crop_border(gray)
@@ -215,6 +319,33 @@ def preprocess_page(image_bgr: np.ndarray) -> np.ndarray:
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
+    return gray
+
+
+def _denoise(gray: np.ndarray) -> np.ndarray:
+    return cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+
+
+def _sharpen(gray: np.ndarray) -> np.ndarray:
+    """Unsharp mask: adds back (original - blurred), which amplifies edges
+    without the harsher artefacts of a raw sharpening kernel.
+    """
+    blurred = cv2.GaussianBlur(gray, (0, 0), sigmaX=3)
+    return cv2.addWeighted(gray, 1.5, blurred, -0.5, 0)
+
+
+def preprocess_page_heavy(image_bgr: np.ndarray) -> np.ndarray:
+    """Heavier variant of preprocess_page() for a page whose first OCR pass
+    came back low-confidence: adds denoising and sharpening on top of the
+    standard pipeline. Neither existed anywhere in this module before --
+    every prior page got the same fixed recipe regardless of how poor the
+    source image actually was. Reserved for confidence-triggered retries
+    (see ocr/confidence.py) rather than applied to every page, since both
+    steps cost real time and can soften/distort an already-clean scan.
+    """
+    gray = preprocess_page(image_bgr)
+    gray = _denoise(gray)
+    gray = _sharpen(gray)
     return gray
 
 

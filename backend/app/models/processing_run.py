@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -33,5 +33,9 @@ class ProcessingRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
     error_message: Mapped[str | None] = mapped_column(String(1000))
+    # How many OCR attempts the confidence-triggered retry loop needed for
+    # this document (1 = first pass was good enough). Null for runs from
+    # before this column existed.
+    attempts_used: Mapped[int | None] = mapped_column(Integer)
 
     document: Mapped["Document"] = relationship(back_populates="processing_runs")

@@ -46,6 +46,9 @@ _COLUMN_UPGRADES: dict[str, list[tuple[str, str]]] = {
         ("vendor_phone", "VARCHAR(30)"),
         ("vendor_email", "VARCHAR(255)"),
     ],
+    "processing_runs": [
+        ("attempts_used", "INTEGER"),
+    ],
 }
 
 
