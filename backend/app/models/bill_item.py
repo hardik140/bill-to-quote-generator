@@ -29,9 +29,12 @@ class BillItem(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("0"))
     unit: Mapped[str | None] = mapped_column(String(20))
 
-    # See DATA.md §7 - source_rate is what appeared on the document (may be
-    # tax-inclusive); taxable_rate is the rate used as the calculation basis.
-    # They are kept distinct so nothing is silently assumed.
+    # See DATA.md §7 - source_rate is the GST-inclusive rate (printed
+    # directly on the document, or derived once from an exclusive rate +
+    # its GST%) and is the value used everywhere calculation, quotation
+    # generation, and comparison need "the rate". taxable_rate is the
+    # GST-exclusive rate, kept only for audit/reference -- it must never be
+    # used as a calculation basis, since GST is not re-applied on top of it.
     source_rate: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
     taxable_rate: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
 

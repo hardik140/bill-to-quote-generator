@@ -30,7 +30,7 @@ def _get_bill_or_404(db: Session, bill_id: str):
 
 def _recalculate_bill_totals(bill) -> None:
     line_results = [
-        compute_line(item.quantity, item.taxable_rate, item.gst_rate) for item in bill.items
+        compute_line(item.quantity, item.source_rate, item.gst_rate) for item in bill.items
     ]
     totals = compute_bill_totals(line_results)
     bill.subtotal = totals.subtotal
@@ -110,7 +110,7 @@ def update_item(
 
     quantity = item.quantity if item.quantity and item.quantity > 0 else Decimal("1")
     gst_rate = item.gst_rate if item.gst_rate is not None else Decimal("0")
-    line_result = compute_line(quantity, item.taxable_rate, gst_rate)
+    line_result = compute_line(quantity, item.source_rate, gst_rate)
     item.line_amount = line_result.line_amount
     item.tax_amount = line_result.tax_amount
     item.total_amount = line_result.total_amount
@@ -169,7 +169,7 @@ def confirm_bill(bill_id: str, db: Session = Depends(get_db)) -> ConfirmResponse
     for item in bill.items:
         try:
             validate_quantity(item.quantity)
-            validate_rate(item.taxable_rate)
+            validate_rate(item.source_rate)
         except ValidationError as exc:
             raise HTTPException(
                 status_code=400,

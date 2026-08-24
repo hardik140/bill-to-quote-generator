@@ -50,6 +50,12 @@ PHONE_RE = re.compile(
 )
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
+# Common labels for the customer/buyer block on an Indian GST invoice.
+BUYER_LABEL_RE = re.compile(
+    r"\b(bill\s*to|buyer|consignee|sold\s*to|customer|client)\b\s*(?:\(.*?\))?\s*[:.\-]?\s*",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class HeaderFields:
@@ -60,6 +66,7 @@ class HeaderFields:
     vendor_email: str | None = None
     invoice_number: str | None = None
     invoice_date: date | None = None
+    buyer_name: str | None = None
 
 
 def _parse_date(match: re.Match) -> date | None:
@@ -212,6 +219,46 @@ def extract_vendor_address(lines: list[OcrLine], vendor_name: str | None) -> str
     return ", ".join(parts) if parts else None
 
 
+def _looks_like_a_name(text: str) -> bool:
+    if not text or len(text) < 3:
+        return False
+    if NON_ADDRESS_HINT_RE.search(text) or GSTIN_RE.search(text.upper()) or DATE_RE.search(text):
+        return False
+    phone_match = PHONE_RE.search(text)
+    if phone_match and _is_mostly_phone(text, phone_match):
+        return False
+    return True
+
+
+def extract_buyer_name(lines: list[OcrLine]) -> str | None:
+    """Heuristic: the buyer/customer name printed after a "Bill To" / "Buyer"
+    / "Customer" label -- either inline on the same line ("Bill To: Acme
+    Corp") or, on boxed GST invoice layouts, on the next printed line below
+    the label. Never guessed when no such label is found (TRD: never
+    fabricate a value that isn't actually on the document)."""
+    for i, line in enumerate(lines):
+        # Full line text here, not the leftmost-cell restriction used for
+        # vendor fields: "Bill To: Acme Corp" is running prose on one line,
+        # not a multi-column table row, so the name may sit in a later
+        # x-gap-clustered cell than the label itself.
+        text = line.text.strip()
+        match = BUYER_LABEL_RE.search(text)
+        if not match:
+            continue
+
+        inline = text[match.end() :].strip(" :.-")
+        if _looks_like_a_name(inline):
+            return inline
+
+        for next_line in lines[i + 1 : i + 3]:
+            candidate = _leftmost_cell_text(next_line)
+            if _looks_like_a_name(candidate):
+                return candidate
+        break  # found the label but no usable name near it; don't keep scanning
+
+    return None
+
+
 def parse_header_fields(lines: list[OcrLine], full_text: str) -> HeaderFields:
     vendor_name = extract_vendor_name(lines)
     return HeaderFields(
@@ -222,4 +269,5 @@ def parse_header_fields(lines: list[OcrLine], full_text: str) -> HeaderFields:
         vendor_email=extract_email(full_text),
         invoice_number=extract_invoice_number(full_text),
         invoice_date=extract_invoice_date(lines),
+        buyer_name=extract_buyer_name(lines),
     )

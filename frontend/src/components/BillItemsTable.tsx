@@ -70,7 +70,7 @@ export default function BillItemsTable({ items, readOnly, currency, onFieldCommi
         ),
       }),
       columnHelper.accessor('rate', {
-        header: () => <span className="block text-right">Rate</span>,
+        header: () => <span className="block text-right">Rate (Incl. GST)</span>,
         cell: ({ row }) => (
           <EditableCell
             value={row.original.rate}

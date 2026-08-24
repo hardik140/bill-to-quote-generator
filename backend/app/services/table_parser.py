@@ -271,8 +271,8 @@ class CandidateItem:
     gst_rate: Decimal | None
     quantity: Decimal | None
     unit: str | None
-    source_rate: Decimal | None
-    taxable_rate: Decimal | None
+    source_rate: Decimal | None  # GST-inclusive rate -- this is THE rate used everywhere downstream
+    taxable_rate: Decimal | None  # GST-exclusive rate, kept only for audit/reference
     extracted_amount: Decimal | None
     confidence: float
     ambiguous: bool = field(default=False)
@@ -391,7 +391,16 @@ def parse_table(lines: list[OcrLine]) -> list[CandidateItem]:
         if rate_excl is not None and rate_incl is not None:
             source_rate, taxable_rate = rate_incl, rate_excl
         elif rate_excl is not None:
-            source_rate = taxable_rate = rate_excl
+            taxable_rate = rate_excl
+            if gst_rate is not None and gst_rate >= 0:
+                # Only the tax-exclusive rate is printed; derive the
+                # GST-inclusive rate once from it and the document's own
+                # GST% column so the rest of the app can standardise on
+                # source_rate (GST-inclusive) without re-deriving it later.
+                source_rate = rate_excl * (1 + gst_rate / Decimal("100"))
+                ambiguous = True
+            else:
+                source_rate = rate_excl
         elif rate_incl is not None:
             source_rate = rate_incl
             if gst_rate is not None and gst_rate >= 0:

@@ -86,9 +86,11 @@ def _clean_description(description: str, serial_no: int = 0) -> str:
 
 
 def _candidate_rate(candidate: CandidateItem) -> Decimal | None:
-    """The single rate shown to the user: the printed price, preferring the
-    tax-exclusive rate when the bill prints both."""
-    return candidate.taxable_rate if candidate.taxable_rate is not None else candidate.source_rate
+    """The single rate shown to the user and used in every downstream
+    calculation: the GST-inclusive rate (printed directly, or derived once
+    from a printed exclusive rate + the document's own GST%). Never the
+    tax-exclusive rate -- see table_parser.CandidateItem.source_rate."""
+    return candidate.source_rate if candidate.source_rate is not None else candidate.taxable_rate
 
 
 def extract_document(db: Session, document: Document) -> Bill:
@@ -176,6 +178,7 @@ def extract_document(db: Session, document: Document) -> Bill:
             vendor_email=header_fields.vendor_email,
             invoice_number=header_fields.invoice_number,
             invoice_date=header_fields.invoice_date,
+            buyer_name=header_fields.buyer_name,
         )
 
         needs_review = len(all_candidate_items) == 0

@@ -1,4 +1,4 @@
-from app.services.field_parser import _find_date_in_text, extract_gstin, parse_header_fields
+from app.services.field_parser import _find_date_in_text, extract_buyer_name, extract_gstin, parse_header_fields
 from app.services.line_grouping import group_lines
 from app.services.ocr.engine import OcrWord, full_text
 
@@ -48,6 +48,33 @@ def test_gstin_regex_matches_real_15_character_gstin():
     # group and could never match a real (always 15-character) GSTIN.
     assert extract_gstin("GSTIN: 07ABCDE1234F1Z5") == "07ABCDE1234F1Z5"
     assert extract_gstin("GSTIN-06AEWPK0704K1ZB") == "06AEWPK0704K1ZB"
+
+
+def test_buyer_name_extracted_inline_after_label():
+    rows = [[("Bill", 10), ("To:", 60), ("G.M.S.", 110), ("Sec-13", 145), ("HUDA", 195)]]
+    words = [_word(text, left, 0) for text, left in rows[0]]
+    lines = group_lines(words)
+
+    assert extract_buyer_name(lines) == "G.M.S. Sec-13 HUDA"
+
+
+def test_buyer_name_extracted_from_line_below_label():
+    rows = [
+        [("Buyer", 10)],
+        [("Acme", 10), ("Traders", 45)],
+    ]
+    words = [_word(text, left, row_idx * 20) for row_idx, row in enumerate(rows) for text, left in row]
+    lines = group_lines(words)
+
+    assert extract_buyer_name(lines) == "Acme Traders"
+
+
+def test_buyer_name_none_when_no_label_present():
+    # Never fabricated when the document doesn't actually print a buyer/bill-to label.
+    words = [_word("Random", 10, 0), _word("Text", 90, 0)]
+    lines = group_lines(words)
+
+    assert extract_buyer_name(lines) is None
 
 
 def test_date_parsing_supports_month_name_format():

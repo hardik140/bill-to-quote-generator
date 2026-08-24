@@ -12,7 +12,7 @@ class BillItemOut(BaseModel):
     id: str
     serial_no: int
     description: str
-    rate: Decimal = Field(validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
+    rate: Decimal = Field(validation_alias=AliasChoices("rate", "source_rate", "taxable_rate"))
     confidence: Decimal | None = None
     user_verified: bool
 
@@ -44,14 +44,14 @@ class BillItemUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     description: str | None = None
-    rate: Decimal | None = Field(default=None, validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
+    rate: Decimal | None = Field(default=None, validation_alias=AliasChoices("rate", "source_rate", "taxable_rate"))
 
 
 class BillItemCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     description: str
-    rate: Decimal = Field(validation_alias=AliasChoices("rate", "taxable_rate", "source_rate"))
+    rate: Decimal = Field(validation_alias=AliasChoices("rate", "source_rate", "taxable_rate"))
 
 
 class ItemReorderRequest(BaseModel):

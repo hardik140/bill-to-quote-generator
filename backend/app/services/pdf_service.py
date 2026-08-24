@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -48,6 +49,38 @@ _table_cell_bold_style = ParagraphStyle(
     fontSize=8.5,
     leading=10,
     textColor=colors.black,
+)
+# "QUOTATION" / "TO :- <buyer>" are printed as plain centered text directly
+# on the page -- no table cell, box, border, or divider around them (the
+# reference is a plain letterhead-style heading, not a bordered element).
+_quotation_title_style = ParagraphStyle(
+    "QuotationTitle",
+    parent=_styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=13,
+    leading=16,
+    textColor=colors.black,
+    alignment=TA_CENTER,
+)
+_quotation_buyer_style = ParagraphStyle(
+    "QuotationBuyer",
+    parent=_quotation_title_style,
+    fontSize=10.5,
+    leading=13,
+)
+# Scenario B's product/rate text is Times-Roman/Times-Bold, not Helvetica
+# (see _scenario2_product_style/_scenario2_rate_style below) -- its own
+# QUOTATION/TO heading uses this serif variant instead so every piece of
+# text on that page shares one font family.
+_quotation_title_style_serif = ParagraphStyle(
+    "QuotationTitleSerif",
+    parent=_quotation_title_style,
+    fontName="Times-Bold",
+)
+_quotation_buyer_style_serif = ParagraphStyle(
+    "QuotationBuyerSerif",
+    parent=_quotation_buyer_style,
+    fontName="Times-Bold",
 )
 _scenario2_product_style = ParagraphStyle(
     "Scenario2Product",
@@ -155,7 +188,12 @@ def _draw_tracked_string(
 ) -> None:
     """Draw text with letter-spacing (canvas.Canvas has no public setCharSpace)."""
     width = pdfmetrics.stringWidth(text, font_name, font_size) + char_space * max(len(text) - 1, 0)
-    start_x = x - width if align == "right" else x
+    if align == "right":
+        start_x = x - width
+    elif align == "center":
+        start_x = x - width / 2
+    else:
+        start_x = x
     text_obj = c.beginText(start_x, y)
     text_obj.setFont(font_name, font_size)
     text_obj.setFillColor(color)
@@ -208,7 +246,7 @@ def _build_item_table(scenario: Scenario) -> Table:
             Paragraph("<b>#</b>", _table_cell_bold_style),
             Paragraph("<b>Product</b>", _table_cell_bold_style),
             Paragraph("<b>Rate</b>", _table_cell_bold_style),
-        ]
+        ],
     ]
 
     for idx, item in enumerate(scenario.items, start=1):
@@ -227,8 +265,8 @@ def _build_item_table(scenario: Scenario) -> Table:
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dbe4f0")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111111")),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#888888")),
-                ("ALIGN", (0, 0), (0, -1), "CENTER"),
-                ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+                ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                ("ALIGN", (2, 1), (2, -1), "RIGHT"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fc")]),
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -241,9 +279,10 @@ def _build_item_table(scenario: Scenario) -> Table:
     return table
 
 
-def _draw_scenario1(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
+def _draw_scenario1(c: canvas.Canvas, scenario: Scenario, template_path: Path, buyer_name: str | None) -> None:
+    heading_bottom = _draw_quotation_heading(c, PAGE_HEIGHT - 75 * mm, buyer_name)
     table = _build_item_table(scenario)
-    table_top = PAGE_HEIGHT - 75 * mm
+    table_top = heading_bottom - 3 * mm
     table_bottom_limit = 105
     available_height = table_top - table_bottom_limit
 
@@ -266,14 +305,62 @@ def _draw_scenario1(c: canvas.Canvas, scenario: Scenario, template_path: Path) -
     table.drawOn(c, CONTENT_LEFT, max(table_bottom_limit, table_top - table_height))
 
 
-def _draw_scenario2(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
-    top_y = PAGE_HEIGHT - 72 * mm
+def _draw_quotation_heading(
+    c: canvas.Canvas,
+    top_y: float,
+    buyer_name: str | None,
+    title_style: ParagraphStyle = _quotation_title_style,
+    buyer_style: ParagraphStyle = _quotation_buyer_style,
+    gap_after_title: float = 2.5 * mm,
+    gap_after_buyer: float = 2.5 * mm,
+) -> float:
+    """Plain "QUOTATION" / "TO :- <buyer>" text, centered across the full
+    content width and printed directly on the page -- no table cell, box,
+    border, background, or divider around either line, matching the
+    reference (a plain letterhead-style heading, not a bordered element).
+    *top_y* is where QUOTATION's top edge sits; both lines are drawn
+    extending downward from there. Returns the y-coordinate immediately
+    below the TO line so the caller can position the item list/table right
+    beneath it. *title_style*/*buyer_style* let a caller match its own
+    scenario's font family (see _quotation_title_style_serif).
+    """
+    width = CONTENT_RIGHT - CONTENT_LEFT
+    to_text = f"TO :- {buyer_name.upper()}" if buyer_name else "TO :- NOT AVAILABLE"
+
+    title_para = Paragraph("QUOTATION", title_style)
+    _, title_height = title_para.wrap(width, PAGE_HEIGHT)
+    title_para.drawOn(c, CONTENT_LEFT, top_y - title_height)
+
+    buyer_top = top_y - title_height - gap_after_title
+    buyer_para = Paragraph(to_text, buyer_style)
+    _, buyer_height = buyer_para.wrap(width, PAGE_HEIGHT)
+    buyer_para.drawOn(c, CONTENT_LEFT, buyer_top - buyer_height)
+
+    return buyer_top - buyer_height - gap_after_buyer
+
+
+def _draw_scenario2(c: canvas.Canvas, scenario: Scenario, template_path: Path, buyer_name: str | None) -> None:
     left_x = CONTENT_LEFT
     serial_width = 8 * mm
     desc_x = left_x + serial_width
     rate_x = CONTENT_RIGHT
     row_gap = 14 * mm
     bottom_limit = 25 * mm  # scenario_22.jpeg has no footer artwork; just clear the physical page edge
+
+    # scenario_22.jpeg's "DATE........" line ends ~68mm from top (measured
+    # directly against the template image). The heading sits directly above
+    # the item list -- like Scenario A's table -- just clear of Date, and
+    # item 1 is pushed down to start below it and the PRODUCT/RATE column
+    # header instead of at the template's original 72mm mark.
+    heading_bottom = _draw_quotation_heading(
+        c, PAGE_HEIGHT - 70 * mm, buyer_name,
+        title_style=_quotation_title_style_serif, buyer_style=_quotation_buyer_style_serif,
+    )
+    header_y = heading_bottom - 5 * mm
+    header_color = colors.HexColor("#0f172a")
+    _draw_tracked_string(c, desc_x, header_y - 2, "PRODUCT", "Times-Bold", 9, 0.8, header_color)
+    _draw_tracked_string(c, rate_x, header_y - 2, "RATE", "Times-Bold", 9, 0.8, header_color, align="right")
+    top_y = header_y - 8 * mm
 
     row_top = top_y
     for idx, item in enumerate(scenario.items, start=1):
@@ -288,7 +375,7 @@ def _draw_scenario2(c: canvas.Canvas, scenario: Scenario, template_path: Path) -
 
         baseline_y = row_top - _scenario2_row_baseline_offset
 
-        c.setFont("Helvetica", 9)
+        c.setFont("Times-Roman", 9)
         c.setFillColor(colors.HexColor("#6b7280"))
         c.drawString(left_x, baseline_y, f"{idx}.")
 
@@ -301,16 +388,21 @@ def _draw_scenario2(c: canvas.Canvas, scenario: Scenario, template_path: Path) -
         row_top -= row_gap
 
 
-def _draw_scenario3(c: canvas.Canvas, scenario: Scenario, template_path: Path) -> None:
+def _draw_scenario3(c: canvas.Canvas, scenario: Scenario, template_path: Path, buyer_name: str | None) -> None:
     left_x = CONTENT_LEFT
     right_x = CONTENT_RIGHT
-    top_y = PAGE_HEIGHT - 54 * mm
     row_gap = 14 * mm
     serial_width = 8 * mm
     desc_x = left_x + serial_width
     # scenario_33.jpeg's "DELIVERING your SATISFACTION" footer artwork starts ~260mm
     # from the top (measured directly from the template image); keep rows above it.
     bottom_limit = PAGE_HEIGHT - 245 * mm
+
+    # The column header is positioned from the heading's actual returned
+    # bottom edge rather than a fixed offset, since its height depends on
+    # font metrics.
+    heading_bottom = _draw_quotation_heading(c, PAGE_HEIGHT - 44 * mm, buyer_name)
+    top_y = heading_bottom - 5 * mm
 
     def draw_column_header(y: float) -> None:
         header_color = colors.HexColor("#0f172a")
@@ -345,6 +437,7 @@ def _draw_scenario3(c: canvas.Canvas, scenario: Scenario, template_path: Path) -
 
         row_top -= row_gap
 
+
 def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
     out_dir = settings.generated_dir / bill.id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -359,11 +452,11 @@ def generate_scenario_pdf(bill: Bill, scenario: Scenario) -> Path:
 
     label = scenario.label.lower()
     if scenario.scenario_type == TYPE_BASELINE or "scenario a" in label:
-        _draw_scenario1(c, scenario, template_path)
+        _draw_scenario1(c, scenario, template_path, bill.buyer_name)
     elif "scenario c" in label:
-        _draw_scenario3(c, scenario, template_path)
+        _draw_scenario3(c, scenario, template_path, bill.buyer_name)
     else:
-        _draw_scenario2(c, scenario, template_path)
+        _draw_scenario2(c, scenario, template_path, bill.buyer_name)
 
     c.showPage()
     c.save()

@@ -24,7 +24,9 @@ ZERO = Decimal("0.00")
 
 
 def _build_scenario_item(item: BillItem, markup_percent: Decimal) -> ScenarioItem:
-    baseline_rate = item.taxable_rate
+    # GST-inclusive rate (source_rate) is the calculation basis throughout --
+    # never taxable_rate (the exclusive rate), which is kept only for audit.
+    baseline_rate = item.source_rate
     adjusted_rate = to_money(baseline_rate * (1 + markup_percent / Decimal("100")))
     line_amount = to_money(item.quantity * adjusted_rate)
     tax_amount = to_money(line_amount * item.gst_rate / Decimal("100"))
