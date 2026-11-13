@@ -5,6 +5,10 @@
   "compatibility_date": "2026-11-13",
   "workers_dev": false,
   "triggers": { "crons": ["* * * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "HEALTH_MONITOR", "class_name": "BackendHealthMonitor" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BackendHealthMonitor"] }],
   "vars": {
     "BACKEND_HEALTH_URL": "https://bill-to-quotation-hardik3-api.onrender.com/api/health"
   },
