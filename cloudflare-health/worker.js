@@ -2,7 +2,7 @@ export async function checkBackend(env) {
   const response = await fetch(env.BACKEND_HEALTH_URL, {
     signal: AbortSignal.timeout(30000),
     headers: { 'Accept': 'application/json' },
-    redirect: 'error',
+    redirect: 'manual',
   });
   if (!response.ok) throw new Error(`Backend health HTTP ${response.status}`);
   const result = await response.json();
