@@ -85,6 +85,27 @@ def add_item(bill_id: str, payload: BillItemCreate, db: Session = Depends(get_db
     return BillItemOut.model_validate(item)
 
 
+@router.put("/{bill_id}/items/reorder", response_model=list[BillItemOut])
+def reorder_items(
+    bill_id: str, payload: ItemReorderRequest, db: Session = Depends(get_db)
+) -> list[BillItemOut]:
+    bill = _get_bill_or_404(db, bill_id)
+    if bill.confirmed:
+        raise HTTPException(status_code=409, detail="Confirmed bills cannot be edited.")
+
+    items_by_id = {item.id: item for item in bill.items}
+    if (len(payload.item_ids_in_order) != len(items_by_id)
+            or set(payload.item_ids_in_order) != set(items_by_id)):
+        raise HTTPException(status_code=400, detail="item_ids_in_order must include every item exactly once.")
+
+    for idx, item_id in enumerate(payload.item_ids_in_order, start=1):
+        items_by_id[item_id].serial_no = idx
+
+    db.commit()
+    db.refresh(bill)
+    return [BillItemOut.model_validate(i) for i in sorted(bill.items, key=lambda i: i.serial_no)]
+
+
 @router.put("/{bill_id}/items/{item_id}", response_model=BillItemOut)
 def update_item(
     bill_id: str, item_id: str, payload: BillItemUpdate, db: Session = Depends(get_db)
@@ -137,26 +158,6 @@ def delete_item(bill_id: str, item_id: str, db: Session = Depends(get_db)) -> No
     db.refresh(bill)
     _recalculate_bill_totals(bill)
     db.commit()
-
-
-@router.put("/{bill_id}/items/reorder", response_model=list[BillItemOut])
-def reorder_items(
-    bill_id: str, payload: ItemReorderRequest, db: Session = Depends(get_db)
-) -> list[BillItemOut]:
-    bill = _get_bill_or_404(db, bill_id)
-    if bill.confirmed:
-        raise HTTPException(status_code=409, detail="Confirmed bills cannot be edited.")
-
-    items_by_id = {item.id: item for item in bill.items}
-    if set(payload.item_ids_in_order) != set(items_by_id.keys()):
-        raise HTTPException(status_code=400, detail="item_ids_in_order must include every item exactly once.")
-
-    for idx, item_id in enumerate(payload.item_ids_in_order, start=1):
-        items_by_id[item_id].serial_no = idx
-
-    db.commit()
-    db.refresh(bill)
-    return [BillItemOut.model_validate(i) for i in sorted(bill.items, key=lambda i: i.serial_no)]
 
 
 @router.post("/{bill_id}/confirm", response_model=ConfirmResponse)
