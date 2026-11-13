@@ -1,0 +1,12 @@
+{
+  "name": "bill-to-quotation-health",
+  "main": "worker.js",
+  "account_id": "e5112a0e63b695c749e77700492a589a",
+  "compatibility_date": "2026-11-13",
+  "workers_dev": false,
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    "BACKEND_HEALTH_URL": "https://bill-to-quotation-hardik3-api.onrender.com/api/health"
+  },
+  "observability": { "enabled": true }
+}

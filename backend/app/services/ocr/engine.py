@@ -56,6 +56,7 @@ class OcrWord:
 
 _engine = None
 _engine_lock = Lock()
+_ocr_lock = Lock()
 
 
 def _get_engine():
@@ -77,6 +78,38 @@ def _get_engine():
 
 
 def run_ocr(image_path: Path) -> list[OcrWord]:
+    # Serialize inference so parallel uploads do not multiply peak memory.
+    with _ocr_lock:
+        if settings.ocr_processor_name == 'tesseract':
+            return _run_tesseract(image_path)
+        return _run_paddle(image_path)
+
+
+def _run_tesseract(image_path: Path) -> list[OcrWord]:
+    import pytesseract
+
+    language = 'eng' if settings.ocr_language == 'en' else settings.ocr_language
+    data = pytesseract.image_to_data(
+        str(image_path), lang=language, config='--psm 6',
+        output_type=pytesseract.Output.DICT, timeout=90,
+    )
+    words: list[OcrWord] = []
+    for i, value in enumerate(data['text']):
+        text = value.strip()
+        confidence = float(data['conf'][i])
+        if not text or confidence < 0:
+            continue
+        words.append(OcrWord(
+            text=text, confidence=confidence,
+            left=int(data['left'][i]), top=int(data['top'][i]),
+            width=int(data['width'][i]), height=int(data['height'][i]),
+            line_num=int(data['line_num'][i]),
+            block_num=int(data['block_num'][i]), par_num=int(data['par_num'][i]),
+        ))
+    return words
+
+
+def _run_paddle(image_path: Path) -> list[OcrWord]:
     """Run PaddleOCR on *image_path* and return a flat list of OcrWord
     objects, one per recognised word -- the same contract run_ocr() has
     always had, so line_grouping.py, table_parser.py, field_parser.py, and
